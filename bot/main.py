@@ -48,6 +48,7 @@ class Bot(commands.Bot):
             "cogs.support",
             "cogs.admin",
             "cogs.general",
+            "cogs.fun",
         ):
             await self.load_extension(extension)
             logging.info("Loaded extension: %s", extension)

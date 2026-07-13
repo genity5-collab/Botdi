@@ -152,6 +152,20 @@ class General(commands.Cog, name="General"):
             '`!embed <#channel> "Title" <desc>` — Post a branded embed'
         ), inline=False)
 
+        embed.add_field(name="🎮 Fun", value=(
+            "`!roll [sides]` — Roll a die (default d6)\n"
+            "`!flip` — Coin flip\n"
+            "`!8ball <question>` — Magic 8-ball\n"
+            "`!poll <question>` — Yes/no poll\n"
+            "`!choose opt1 | opt2 | …` — Pick randomly\n"
+            "`!rps <rock|paper|scissors>` — Play RPS\n"
+            "`!math <expr>` — Calculate (e.g. `!math 5*12`)\n"
+            "`!avatar [user]` — Show avatar\n"
+            "`!botinfo` — Nexus stats\n"
+            "`!snipe` — Last deleted message (staff)\n"
+            "`!afk [reason]` — Set AFK status"
+        ), inline=False)
+
         embed.add_field(name="ℹ️ General", value=(
             "`!ping` — Check latency\n"
             "`!uptime` — Show uptime\n"

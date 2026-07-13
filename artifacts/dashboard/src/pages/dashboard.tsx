@@ -77,6 +77,23 @@ const COMMANDS = [
     ],
   },
   {
+    category: '🎮 Fun',
+    color: '#9B59B6',
+    items: [
+      { usage: '!roll [sides]', desc: 'Roll a die — default d6, up to d1000' },
+      { usage: '!flip', desc: 'Flip a coin — heads or tails' },
+      { usage: '!8ball <question>', desc: 'Ask the magic 8-ball anything' },
+      { usage: '!poll <question>', desc: 'Start a 👍/👎 poll in the current channel' },
+      { usage: '!choose opt1 | opt2 | …', desc: 'Pick one option at random' },
+      { usage: '!rps <rock|paper|scissors>', desc: 'Play Rock Paper Scissors against Nexus' },
+      { usage: '!math <expression>', desc: 'Evaluate a safe math expression (e.g. 5*12+3)' },
+      { usage: '!avatar [user]', desc: 'Show a user\'s full avatar with download links' },
+      { usage: '!botinfo', desc: 'Show Nexus stats: ping, servers, commands, AI model' },
+      { usage: '!snipe', desc: 'Show the last deleted message in this channel (staff)', perm: 'Manage Messages' },
+      { usage: '!afk [reason]', desc: 'Set AFK — Nexus notifies people who ping you until you return' },
+    ],
+  },
+  {
     category: 'ℹ️ General',
     color: '#95A5A6',
     items: [
@@ -85,6 +102,19 @@ const COMMANDS = [
       { usage: '!userinfo [user]', desc: 'Show detailed info about a user (default: yourself)' },
       { usage: '!serverinfo', desc: 'Show server statistics and configuration' },
       { usage: '!help', desc: 'Show the full command reference embed in Discord' },
+    ],
+  },
+  {
+    category: '🤖 AI (@mention)',
+    color: '#5865F2',
+    items: [
+      { usage: '@Nexus hi / hello / hey', desc: 'Greeting — instant local reply, no API call' },
+      { usage: '@Nexus thanks / ty', desc: 'Thanks — instant local reply' },
+      { usage: '@Nexus good bot', desc: 'Compliment — instant local reply' },
+      { usage: '@Nexus who are you', desc: 'Identity — instant local reply' },
+      { usage: '@Nexus roll / flip / test / ping', desc: 'Simple queries — answered locally without Gemini' },
+      { usage: '@Nexus <any question>', desc: 'AI answer via Gemini (60 s cooldown) — max 380 chars' },
+      { usage: '@Nexus I\'m being bullied by @user', desc: 'Trigger anti-bully investigation → 30-min timeout if confirmed' },
     ],
   },
 ];
