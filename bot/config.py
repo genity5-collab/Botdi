@@ -20,7 +20,12 @@ BOT_COLOR = 0x5865F2          # Discord blurple
 
 # ── AI settings ───────────────────────────────────────────────────────────────
 AI_COOLDOWN_SECONDS = 60      # Per-user cooldown for AI ping responses
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-flash-latest"
+# Fallback chain tried in order when primary model is overloaded / errors
+GEMINI_FALLBACK_MODELS = [
+    "gemini-2.0-flash-lite",   # lighter, still fast
+    "gemini-1.5-flash-8b",     # smallest/cheapest — last resort
+]
 
 # ── Moderation settings ───────────────────────────────────────────────────────
 STRIKES_FOR_BAN = 3

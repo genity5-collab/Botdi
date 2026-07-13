@@ -1,7 +1,7 @@
 """
 Moderation Cog
 ──────────────
-Commands : !strike, !kick, !ban, !strikes
+Commands : !strike, !kick, !ban, !strikes, !mute, !unmute, !warn, !purge, !slowmode, !lock, !unlock
 Auto-mod  : Blacklisted words → 1 h timeout (15 s filter cooldown per user)
 Logic     : 1 strike = 24 h timeout  |  3 strikes = ban
             All actions logged to LOG_CHANNEL_ID.
@@ -45,15 +45,8 @@ class Moderation(commands.Cog, name="Moderation"):
         reason: str,
         moderator: discord.Member | discord.User,
     ) -> None:
-        """
-        Add a strike. Applies:
-          - 1+ strike → 24 h timeout
-          - 3+ strikes → ban
-        Logs the action and DMs the user an appeal embed.
-        """
         total = await add_strike(target.id)
 
-        # Fetch member if we only have a User object
         member: discord.Member | None = guild.get_member(target.id)
         if member is None:
             try:
@@ -64,7 +57,6 @@ class Moderation(commands.Cog, name="Moderation"):
         action_taken = f"Strike {total} issued"
 
         if total >= STRIKES_FOR_BAN:
-            # Ban
             await reset_strikes(target.id)
             try:
                 if member:
@@ -75,7 +67,6 @@ class Moderation(commands.Cog, name="Moderation"):
             except discord.Forbidden:
                 action_taken = f"Strike {total} — ban failed (missing permissions)"
         elif member:
-            # 24 h timeout per strike
             until = discord.utils.utcnow() + datetime.timedelta(seconds=STRIKE_TIMEOUT_SECONDS)
             try:
                 await member.timeout(until, reason=f"Strike {total}: {reason}")
@@ -83,7 +74,6 @@ class Moderation(commands.Cog, name="Moderation"):
             except discord.Forbidden:
                 action_taken = f"Strike {total} issued (timeout failed — missing permissions)"
 
-        # Log
         await log_action(
             self.bot,
             "⚠️ Strike Issued",
@@ -93,7 +83,6 @@ class Moderation(commands.Cog, name="Moderation"):
             f"**Outcome:** {action_taken}",
         )
 
-        # Appeal DM
         try:
             dm = await target.create_dm()
             await dm.send(embed=build_appeal_embed(reason))
@@ -124,7 +113,6 @@ class Moderation(commands.Cog, name="Moderation"):
         except discord.HTTPException:
             pass
 
-        # 1 h timeout
         until = discord.utils.utcnow() + datetime.timedelta(seconds=AUTOMOD_TIMEOUT_SECONDS)
         action_taken = "1 h timeout applied"
         try:
@@ -137,8 +125,8 @@ class Moderation(commands.Cog, name="Moderation"):
                 embed=discord.Embed(
                     title="🔇 Auto-Moderation",
                     description=(
-                        f"Your message was removed for containing a prohibited word.\n"
-                        f"You have been muted for **1 hour**."
+                        "Your message was removed for containing a prohibited word.\n"
+                        "You have been muted for **1 hour**."
                     ),
                     color=0xE74C3C,
                 )
@@ -159,59 +147,45 @@ class Moderation(commands.Cog, name="Moderation"):
     @commands.command(name="strike")
     @commands.has_permissions(moderate_members=True)
     async def strike_cmd(self, ctx: commands.Context, target_str: str, *, reason: str = "No reason provided") -> None:
-        """!strike <user_id|@mention> [reason]"""
+        """Issue a strike to a user."""
         uid = parse_user_id(target_str)
         if uid is None:
             await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
             return
-
         try:
             target = await self.bot.fetch_user(uid)
         except discord.NotFound:
             await ctx.send("❌ User not found.", delete_after=10)
             return
-
         await self.apply_strike(ctx.guild, target, reason, ctx.author)
         total = await get_strikes(target.id)
-        await ctx.send(
-            f"✅ Strike issued to {target.mention}. They now have **{total}** strike(s).",
-            delete_after=15,
-        )
+        await ctx.send(f"✅ Strike issued to {target.mention}. They now have **{total}** strike(s).", delete_after=15)
 
-    # ── !kick ────────────────────────────────────────────────────────────────
+    # ── !kick ─────────────────────────────────────────────────────────────────
 
     @commands.command(name="kick")
     @commands.has_permissions(kick_members=True)
     async def kick_cmd(self, ctx: commands.Context, target_str: str, *, reason: str = "No reason provided") -> None:
-        """!kick <user_id|@mention> [reason]"""
+        """Kick a member from the server."""
         uid = parse_user_id(target_str)
         if uid is None:
             await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
             return
-
         member = ctx.guild.get_member(uid)
         if member is None:
             await ctx.send("❌ Member not found in this server.", delete_after=10)
             return
-
         try:
             await member.send(embed=build_appeal_embed(reason))
         except discord.HTTPException:
             pass
-
         try:
             await member.kick(reason=f"{ctx.author}: {reason}")
         except discord.Forbidden:
             await ctx.send("❌ Missing permissions to kick this user.", delete_after=10)
             return
-
-        await log_action(
-            self.bot,
-            "👢 Member Kicked",
-            f"**User:** {member.mention} (`{member.id}`)\n"
-            f"**Moderator:** {ctx.author.mention}\n"
-            f"**Reason:** {reason}",
-        )
+        await log_action(self.bot, "👢 Member Kicked",
+            f"**User:** {member.mention} (`{member.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}")
         await ctx.send(f"✅ **{member}** has been kicked.", delete_after=15)
 
     # ── !ban ──────────────────────────────────────────────────────────────────
@@ -219,36 +193,27 @@ class Moderation(commands.Cog, name="Moderation"):
     @commands.command(name="ban")
     @commands.has_permissions(ban_members=True)
     async def ban_cmd(self, ctx: commands.Context, target_str: str, *, reason: str = "No reason provided") -> None:
-        """!ban <user_id|@mention> [reason]"""
+        """Ban a user from the server."""
         uid = parse_user_id(target_str)
         if uid is None:
             await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
             return
-
         try:
             target = await self.bot.fetch_user(uid)
         except discord.NotFound:
             await ctx.send("❌ User not found.", delete_after=10)
             return
-
         try:
             await target.send(embed=build_appeal_embed(reason))
         except discord.HTTPException:
             pass
-
         try:
             await ctx.guild.ban(target, reason=f"{ctx.author}: {reason}", delete_message_days=0)
         except discord.Forbidden:
             await ctx.send("❌ Missing permissions to ban this user.", delete_after=10)
             return
-
-        await log_action(
-            self.bot,
-            "🔨 Member Banned",
-            f"**User:** {target.mention} (`{target.id}`)\n"
-            f"**Moderator:** {ctx.author.mention}\n"
-            f"**Reason:** {reason}",
-        )
+        await log_action(self.bot, "🔨 Member Banned",
+            f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}")
         await ctx.send(f"✅ **{target}** has been banned.", delete_after=15)
 
     # ── !strikes ──────────────────────────────────────────────────────────────
@@ -256,18 +221,16 @@ class Moderation(commands.Cog, name="Moderation"):
     @commands.command(name="strikes")
     @commands.has_permissions(moderate_members=True)
     async def strikes_cmd(self, ctx: commands.Context, target_str: str) -> None:
-        """!strikes <user_id|@mention>"""
+        """View a user's strike count."""
         uid = parse_user_id(target_str)
         if uid is None:
             await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
             return
-
         try:
             target = await self.bot.fetch_user(uid)
         except discord.NotFound:
             await ctx.send("❌ User not found.", delete_after=10)
             return
-
         total = await get_strikes(target.id)
         embed = discord.Embed(
             title="📋 Strike Record",
@@ -276,17 +239,186 @@ class Moderation(commands.Cog, name="Moderation"):
         )
         await ctx.send(embed=embed)
 
+    # ── !mute ─────────────────────────────────────────────────────────────────
+
+    @commands.command(name="mute")
+    @commands.has_permissions(moderate_members=True)
+    async def mute_cmd(self, ctx: commands.Context, target_str: str, minutes: int = 10, *, reason: str = "No reason provided") -> None:
+        """Timeout a user. Usage: !mute <user> [minutes] [reason]"""
+        uid = parse_user_id(target_str)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        if minutes < 1 or minutes > 40320:  # Discord max is 28 days
+            await ctx.send("❌ Duration must be between 1 and 40320 minutes.", delete_after=10)
+            return
+        member = ctx.guild.get_member(uid)
+        if member is None:
+            await ctx.send("❌ Member not found in this server.", delete_after=10)
+            return
+        until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
+        try:
+            await member.timeout(until, reason=f"{ctx.author}: {reason}")
+        except discord.Forbidden:
+            await ctx.send("❌ Missing permissions to timeout this user.", delete_after=10)
+            return
+        try:
+            await member.send(embed=discord.Embed(
+                title="🔇 You have been muted",
+                description=f"**Duration:** {minutes} minute(s)\n**Reason:** {reason}",
+                color=0xE74C3C,
+            ))
+        except discord.HTTPException:
+            pass
+        await log_action(self.bot, "🔇 Member Muted",
+            f"**User:** {member.mention} (`{member.id}`)\n**Moderator:** {ctx.author.mention}\n"
+            f"**Duration:** {minutes}m\n**Reason:** {reason}")
+        await ctx.send(f"✅ {member.mention} has been muted for **{minutes}** minute(s).", delete_after=15)
+
+    # ── !unmute ───────────────────────────────────────────────────────────────
+
+    @commands.command(name="unmute")
+    @commands.has_permissions(moderate_members=True)
+    async def unmute_cmd(self, ctx: commands.Context, target_str: str) -> None:
+        """Remove a timeout from a user."""
+        uid = parse_user_id(target_str)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        member = ctx.guild.get_member(uid)
+        if member is None:
+            await ctx.send("❌ Member not found in this server.", delete_after=10)
+            return
+        try:
+            await member.timeout(None, reason=f"Unmuted by {ctx.author}")
+        except discord.Forbidden:
+            await ctx.send("❌ Missing permissions to remove timeout.", delete_after=10)
+            return
+        await log_action(self.bot, "🔊 Member Unmuted",
+            f"**User:** {member.mention} (`{member.id}`)\n**Moderator:** {ctx.author.mention}", color=0x2ECC71)
+        await ctx.send(f"✅ {member.mention} has been unmuted.", delete_after=15)
+
+    # ── !warn ─────────────────────────────────────────────────────────────────
+
+    @commands.command(name="warn")
+    @commands.has_permissions(moderate_members=True)
+    async def warn_cmd(self, ctx: commands.Context, target_str: str, *, reason: str = "No reason provided") -> None:
+        """Send a warning DM to a user (no strike applied)."""
+        uid = parse_user_id(target_str)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        try:
+            target = await self.bot.fetch_user(uid)
+        except discord.NotFound:
+            await ctx.send("❌ User not found.", delete_after=10)
+            return
+        embed = discord.Embed(
+            title="⚠️ Official Warning",
+            description=(
+                f"**Reason:** {reason}\n\n"
+                "This is a formal warning. Further violations may result in a strike or ban."
+            ),
+            color=0xF0B132,
+        )
+        try:
+            dm = await target.create_dm()
+            await dm.send(embed=embed)
+            dm_sent = True
+        except discord.HTTPException:
+            dm_sent = False
+        await log_action(self.bot, "⚠️ Warning Issued",
+            f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n"
+            f"**Reason:** {reason}\n**DM Sent:** {'Yes' if dm_sent else 'No (DMs closed)'}", color=0xF0B132)
+        status = "✅" if dm_sent else "⚠️ (DMs closed, warning not delivered)"
+        await ctx.send(f"{status} Warning sent to {target.mention}.", delete_after=15)
+
+    # ── !purge ────────────────────────────────────────────────────────────────
+
+    @commands.command(name="purge")
+    @commands.has_permissions(manage_messages=True)
+    async def purge_cmd(self, ctx: commands.Context, count: int) -> None:
+        """Delete recent messages. Usage: !purge <1-100>"""
+        if count < 1 or count > 100:
+            await ctx.send("❌ Count must be between 1 and 100.", delete_after=10)
+            return
+        await ctx.message.delete()
+        deleted = await ctx.channel.purge(limit=count)
+        await log_action(self.bot, "🗑️ Messages Purged",
+            f"**Channel:** {ctx.channel.mention}\n**Moderator:** {ctx.author.mention}\n**Count:** {len(deleted)}", color=0x9B59B6)
+        msg = await ctx.send(f"✅ Deleted **{len(deleted)}** message(s).")
+        await discord.utils.sleep_until(discord.utils.utcnow() + datetime.timedelta(seconds=5))
+        try:
+            await msg.delete()
+        except discord.HTTPException:
+            pass
+
+    # ── !slowmode ─────────────────────────────────────────────────────────────
+
+    @commands.command(name="slowmode")
+    @commands.has_permissions(manage_channels=True)
+    async def slowmode_cmd(self, ctx: commands.Context, seconds: int) -> None:
+        """Set channel slowmode. Usage: !slowmode <seconds> (0 to disable)"""
+        if seconds < 0 or seconds > 21600:
+            await ctx.send("❌ Slowmode must be between 0 and 21600 seconds.", delete_after=10)
+            return
+        await ctx.channel.edit(slowmode_delay=seconds)
+        if seconds == 0:
+            await ctx.send("✅ Slowmode disabled.", delete_after=10)
+        else:
+            await ctx.send(f"✅ Slowmode set to **{seconds}s**.", delete_after=10)
+        await log_action(self.bot, "⏱️ Slowmode Changed",
+            f"**Channel:** {ctx.channel.mention}\n**Moderator:** {ctx.author.mention}\n**Delay:** {seconds}s", color=0x3498DB)
+
+    # ── !lock ─────────────────────────────────────────────────────────────────
+
+    @commands.command(name="lock")
+    @commands.has_permissions(manage_channels=True)
+    async def lock_cmd(self, ctx: commands.Context, channel: discord.TextChannel | None = None) -> None:
+        """Lock a channel so no one can send messages."""
+        ch = channel or ctx.channel
+        overwrite = ch.overwrites_for(ctx.guild.default_role)
+        overwrite.send_messages = False
+        await ch.set_permissions(ctx.guild.default_role, overwrite=overwrite)
+        await ch.send(embed=discord.Embed(
+            title="🔒 Channel Locked",
+            description="This channel has been locked by a moderator.",
+            color=0xE74C3C,
+        ))
+        if channel and channel != ctx.channel:
+            await ctx.send(f"✅ {ch.mention} has been locked.", delete_after=10)
+        await log_action(self.bot, "🔒 Channel Locked",
+            f"**Channel:** {ch.mention}\n**Moderator:** {ctx.author.mention}")
+
+    # ── !unlock ───────────────────────────────────────────────────────────────
+
+    @commands.command(name="unlock")
+    @commands.has_permissions(manage_channels=True)
+    async def unlock_cmd(self, ctx: commands.Context, channel: discord.TextChannel | None = None) -> None:
+        """Unlock a channel."""
+        ch = channel or ctx.channel
+        overwrite = ch.overwrites_for(ctx.guild.default_role)
+        overwrite.send_messages = None  # reset to default
+        await ch.set_permissions(ctx.guild.default_role, overwrite=overwrite)
+        await ch.send(embed=discord.Embed(
+            title="🔓 Channel Unlocked",
+            description="This channel has been unlocked.",
+            color=0x2ECC71,
+        ))
+        if channel and channel != ctx.channel:
+            await ctx.send(f"✅ {ch.mention} has been unlocked.", delete_after=10)
+        await log_action(self.bot, "🔓 Channel Unlocked",
+            f"**Channel:** {ch.mention}\n**Moderator:** {ctx.author.mention}", color=0x2ECC71)
+
     # ── Error handlers ────────────────────────────────────────────────────────
 
-    @strike_cmd.error
-    @kick_cmd.error
-    @ban_cmd.error
-    @strikes_cmd.error
-    async def mod_error(self, ctx: commands.Context, error: Exception) -> None:
+    async def cog_command_error(self, ctx: commands.Context, error: Exception) -> None:
         if isinstance(error, commands.MissingPermissions):
             await ctx.send("❌ You don't have permission to use this command.", delete_after=10)
         elif isinstance(error, commands.MissingRequiredArgument):
             await ctx.send(f"❌ Missing argument: `{error.param.name}`.", delete_after=10)
+        elif isinstance(error, commands.BadArgument):
+            await ctx.send(f"❌ Invalid argument: {error}", delete_after=10)
         else:
             await ctx.send(f"❌ Error: {error}", delete_after=10)
 

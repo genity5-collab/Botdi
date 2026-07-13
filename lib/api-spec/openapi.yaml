@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: bot
+    description: Discord bot status and logs
 paths:
   /healthz:
     get:
@@ -24,6 +26,60 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /bot/status:
+    get:
+      operationId: getBotStatus
+      tags: [bot]
+      summary: Get bot connection status
+      responses:
+        "200":
+          description: Bot status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+  /bot/logs:
+    get:
+      operationId: getBotLogs
+      tags: [bot]
+      summary: Get recent bot log lines
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: Recent log entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotLogs"
+  /bot/strikes:
+    get:
+      operationId: getBotStrikes
+      tags: [bot]
+      summary: Get all user strike counts
+      responses:
+        "200":
+          description: Strike records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrikeMap"
+  /bot/tickets:
+    get:
+      operationId: getBotTickets
+      tags: [bot]
+      summary: Get all support tickets
+      responses:
+        "200":
+          description: Ticket records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketMap"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +89,79 @@ components:
           type: string
       required:
         - status
-
+    BotStatus:
+      type: object
+      properties:
+        online:
+          type: boolean
+        bot_name:
+          type: string
+        bot_id:
+          type: string
+        guild_count:
+          type: integer
+        uptime_seconds:
+          type: number
+        started_at:
+          type: string
+        last_updated:
+          type: string
+      required:
+        - online
+        - bot_name
+        - bot_id
+        - guild_count
+        - uptime_seconds
+        - started_at
+        - last_updated
+    LogEntry:
+      type: object
+      properties:
+        ts:
+          type: string
+        level:
+          type: string
+        msg:
+          type: string
+      required:
+        - ts
+        - level
+        - msg
+    BotLogs:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/LogEntry"
+      required:
+        - entries
+    StrikeMap:
+      type: object
+      properties:
+        strikes:
+          type: object
+          additionalProperties:
+            type: integer
+      required:
+        - strikes
+    TicketMap:
+      type: object
+      properties:
+        tickets:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              user_id:
+                type: integer
+              category:
+                type: string
+              status:
+                type: string
+            required:
+              - user_id
+              - category
+              - status
+      required:
+        - tickets
