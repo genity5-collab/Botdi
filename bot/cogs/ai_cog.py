@@ -20,7 +20,7 @@ Cooldowns / Limits
 ──────────────────
   • Guild  — NO cooldown at all. Respond to every mention instantly.
   • DM     — 15 messages per day per user (resets midnight UTC).
-  • Owner  �� Zero limits everywhere, always.
+  • Owner  — Zero limits everywhere, always.
 
 Memory
 ──────
@@ -125,30 +125,46 @@ _FAST: list[tuple[set[str], list[str]]] = [
      ["Good morning! ☀️","Morning! ☀️ Hope your day's great!"]),
     ({"good night","goodnight","gn"},
      ["Good night! 🌙 Sleep well!","Night! 🌙"]),
-    ({"good evening","evening"},{"Good evening! 🌆","Evening! 😊"}),
+    ({"good evening","evening"},
+     ["Good evening! 🌆","Evening! 😊"]),
     ({"thanks","ty","thx","tysm","thank you","thank u","thnx","tyvm"},
      ["No problem! 😊","Anytime! 🙌","Happy to help! ✨"]),
     ({"good bot","nice bot","great bot","best bot","amazing bot"},
      ["Appreciate it! 🌟","Thanks! 😄","You're too kind! ✨"]),
     ({"ok","okay","k","alright","sure","got it","understood","copy","roger"},
      ["👍","Got it!","Sounds good!"]),
-    ({"yes","yep","yup","yeah","yea"},{"👍","Yep! 😊","Yes! ✅"}),
-    ({"no","nope","nah"},{"Got it! 👍","No problem! 😊","Alright!"}),
-    ({"lol","lmao","lmfao","haha","hahaha"},{"😄","haha! 😄","😂"}),
-    ({"test","testing"},{"Working! ✅","Online! ✅"}),
-    ({"ping"},{"Pong! 🏓"}),
+    ({"yes","yep","yup","yeah","yea"},
+     ["👍","Yep! 😊","Yes! ✅"]),
+    ({"no","nope","nah"},
+     ["Got it! 👍","No problem! 😊","Alright!"]),
+    ({"lol","lmao","lmfao","haha","hahaha"},
+     ["😄","haha! 😄","😂"]),
+    ({"test","testing"},
+     ["Working! ✅","Online! ✅"]),
+    ({"ping"},
+     ["Pong! 🏓"]),
     ({"bye","goodbye","cya","see ya","later","bb","ttyl","peace"},
      ["Take care! 👋","See ya! ✌️","Bye! 😊"]),
-    ({"brb"},{"I'll be here! 😊"}),
-    ({"gg","good game","ggs"},{"GG! 🎮","GG well played! 🎮"}),
-    ({"rip"},{"F 🫡","RIP 🫡"}),
-    ({"nice","cool","awesome","dope","fire","sick","lit","based"},{"💯","😄","👍"}),
-    ({"same","fr","real","true","facts","mood"},{"💯","Facts! 😄","Totally!"}),
-    ({"sorry","my bad","mb","apologies"},{"No worries! 😊","All good! 👍"}),
-    ({"nvm","nevermind","never mind","forget it"},{"No problem! 👍","OK! 😊"}),
-    ({"omg","wow","whoa","no way"},{"Right?! 😮","Wow! 😮"}),
-    ({"wait","hold on","one sec"},{"Sure, take your time! 😊"}),
-    ({"bored","so bored"},{"Try `/roll`, `/8ball`, or `/rps`! 🎮"}),
+    ({"brb"},
+     ["I'll be here! 😊"]),
+    ({"gg","good game","ggs"},
+     ["GG! 🎮","GG well played! 🎮"]),
+    ({"rip"},
+     ["F 🫡","RIP 🫡"]),
+    ({"nice","cool","awesome","dope","fire","sick","lit","based"},
+     ["💯","😄","👍"]),
+    ({"same","fr","real","true","facts","mood"},
+     ["💯","Facts! 😄","Totally!"]),
+    ({"sorry","my bad","mb","apologies"},
+     ["No worries! 😊","All good! 👍"]),
+    ({"nvm","nevermind","never mind","forget it"},
+     ["No problem! 👍","OK! 😊"]),
+    ({"omg","wow","whoa","no way"},
+     ["Right?! 😮","Wow! 😮"]),
+    ({"wait","hold on","one sec"},
+     ["Sure, take your time! 😊"]),
+    ({"bored","so bored"},
+     ["Try `/roll`, `/8ball`, or `/rps`! 🎮"]),
 ]
 
 _BULLY_KEYWORDS = {
@@ -167,7 +183,7 @@ def _fast_reply(query: str) -> str | None:
         return None
     for keywords, replies in _FAST:
         if lower in keywords:
-            return random.choice(list(replies))
+            return random.choice(replies)
     return None
 
 def _is_harmful(query: str) -> bool:

@@ -59,7 +59,7 @@ class Bot(commands.Bot):
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="the server | !help",
+                name="the server | /help",
             )
         )
 
