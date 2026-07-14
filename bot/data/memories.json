@@ -7,6 +7,22 @@
     {
       "role": "assistant",
       "content": "Hello _sbian_! How's your day going so far?"
+    },
+    {
+      "role": "user",
+      "content": "Hi nexus"
+    },
+    {
+      "role": "assistant",
+      "content": "It's great to catch up with you, Xeqel! What's new and exciting in your world?"
+    },
+    {
+      "role": "user",
+      "content": "How are you"
+    },
+    {
+      "role": "assistant",
+      "content": "I'm doing great, Xeqel! Thanks so much for asking. 😊 I always love hanging out here in the server and chatting with everyone. How has your day been going so far? I'm all ears if you want to share!"
     }
   ]
 }

@@ -109,32 +109,26 @@ class Support(commands.Cog, name="Support"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    # ── DM listener ───────────────────────────────────────────────────────────
+    # ── DM listener — only forwards messages for active tickets ───────────────
+    # The support menu is NOT auto-sent on every DM; use !ticket to open one.
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         # Only handle DMs from real users
         if message.author.bot or message.guild is not None:
             return
+        # Ignore bot commands — let the command handler deal with them
+        if message.content.startswith("!"):
+            return
 
         user = message.author
         existing_tid = await get_user_open_ticket(user.id)
 
+        # No open ticket → let the AI cog handle the conversation, do nothing here
         if existing_tid is None:
-            # No open ticket — send the category menu
-            await message.channel.send(
-                embed=discord.Embed(
-                    title="🎫 Support Center",
-                    description=(
-                        "Welcome! Please select the category that best describes your issue."
-                    ),
-                    color=BOT_COLOR,
-                ),
-                view=SupportView(),
-            )
             return
 
-        # Active ticket — forward the message to the admin channel
+        # Active ticket → forward message to admin channel
         admin_channel = self.bot.get_channel(ADMIN_CHANNEL_ID)
         if admin_channel is None:
             await message.channel.send("⚠️ Support channel not found. Please try again later.")
@@ -149,13 +143,59 @@ class Support(commands.Cog, name="Support"):
         embed.set_author(name=str(user), icon_url=user.display_avatar.url)
         embed.set_footer(text=f"User ID: {user.id} | !reply {existing_tid} <msg> | !close {existing_tid}")
 
-        # Forward any attachments as URLs
         if message.attachments:
             attach_links = "\n".join(a.url for a in message.attachments)
             embed.add_field(name="📎 Attachments", value=attach_links[:1024], inline=False)
 
         await admin_channel.send(embed=embed)
         await message.add_reaction("✅")
+
+    # ── !ticket — open a support ticket from anywhere ─────────────────────────
+
+    @commands.command(name="ticket")
+    async def ticket_cmd(self, ctx: commands.Context) -> None:
+        """Open a support ticket. Works in DMs or in the server."""
+        existing = await get_user_open_ticket(ctx.author.id)
+        if existing:
+            await ctx.send(
+                embed=discord.Embed(
+                    title="🎫 Ticket Already Open",
+                    description=(
+                        f"You already have an open ticket (`#{existing}`).\n"
+                        "Continue describing your issue and staff will reply soon."
+                    ),
+                    color=BOT_COLOR,
+                ),
+                delete_after=15,
+            )
+            return
+
+        try:
+            dm = await ctx.author.create_dm()
+            await dm.send(
+                embed=discord.Embed(
+                    title="🎫 Support Center",
+                    description="Select the category that best describes your issue.",
+                    color=BOT_COLOR,
+                ),
+                view=SupportView(),
+            )
+            if ctx.guild:
+                await ctx.send(
+                    embed=discord.Embed(
+                        description="📬 Check your DMs — I've sent you the support menu!",
+                        color=BOT_COLOR,
+                    ),
+                    delete_after=10,
+                )
+        except discord.Forbidden:
+            await ctx.send(
+                embed=discord.Embed(
+                    description="❌ I couldn't DM you. Please enable DMs from server members.",
+                    color=0xED4245,
+                ),
+                delete_after=12,
+            )
 
     # ── !reply ────────────────────────────────────────────────────────────────
 
