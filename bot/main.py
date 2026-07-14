@@ -18,21 +18,20 @@ from config import DISCORD_TOKEN, BOT_PREFIX
 from cogs.support import SupportView
 import log_handler as _log_handler
 
-DATA_DIR = Path(__file__).parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
-
+DATA_DIR    = Path(__file__).parent / "data"
 STATUS_FILE = DATA_DIR / "status.json"
+DATA_DIR.mkdir(exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-_log_handler.install()  # also stream to rolling JSON file
+_log_handler.install()
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
-intents.dm_messages = True
+intents.members          = True
+intents.dm_messages      = True
 
 
 class Bot(commands.Bot):
@@ -42,7 +41,7 @@ class Bot(commands.Bot):
 
     async def setup_hook(self) -> None:
         self.add_view(SupportView())
-        for extension in (
+        for ext in (
             "cogs.ai_cog",
             "cogs.moderation",
             "cogs.support",
@@ -50,12 +49,13 @@ class Bot(commands.Bot):
             "cogs.general",
             "cogs.fun",
         ):
-            await self.load_extension(extension)
-            logging.info("Loaded extension: %s", extension)
+            await self.load_extension(ext)
+            logging.info("Loaded: %s", ext)
         self._write_status.start()
 
     async def on_ready(self) -> None:
-        logging.info("Logged in as %s (%s)", self.user, self.user.id)
+        logging.info("Online as %s (%s) — %d guilds",
+                     self.user, self.user.id, len(self.guilds))
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
@@ -65,19 +65,18 @@ class Bot(commands.Bot):
 
     @tasks.loop(seconds=5)
     async def _write_status(self) -> None:
-        """Write bot status to a JSON file every 5 s for the dashboard."""
         try:
             STATUS_FILE.write_text(json.dumps({
-                "online": True,
-                "bot_name": str(self.user) if self.user else "unknown",
-                "bot_id": str(self.user.id) if self.user else "",
-                "guild_count": len(self.guilds),
+                "online":         True,
+                "bot_name":       str(self.user) if self.user else "unknown",
+                "bot_id":         str(self.user.id) if self.user else "",
+                "guild_count":    len(self.guilds),
                 "uptime_seconds": time.monotonic() - self._start_time,
-                "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "started_at":     datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "last_updated":   datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }, indent=2))
         except Exception as exc:
-            logging.warning("Failed to write status file: %s", exc)
+            logging.warning("Status write failed: %s", exc)
 
     @_write_status.before_loop
     async def _before_write(self) -> None:
@@ -90,16 +89,12 @@ async def main() -> None:
         async with bot:
             await bot.start(DISCORD_TOKEN)
     finally:
-        # Write offline status on shutdown
         try:
             STATUS_FILE.write_text(json.dumps({
-                "online": False,
-                "bot_name": "",
-                "bot_id": "",
-                "guild_count": 0,
-                "uptime_seconds": 0,
-                "started_at": "",
-                "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "online": False, "bot_name": "", "bot_id": "",
+                "guild_count": 0, "uptime_seconds": 0,
+                "started_at": "", "last_updated":
+                datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }, indent=2))
         except Exception:
             pass
