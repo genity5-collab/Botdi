@@ -23,7 +23,7 @@ DM_QUOTA_FILE = DATA_DIR / "dm_quota.json"
 
 _lock = asyncio.Lock()
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
+# ── Internal helpers ──────────────────────────────────────────────────────────[...]
 
 def _load(path: Path) -> dict:
     if path.exists():
@@ -42,7 +42,7 @@ _tickets  : dict[str, dict[str, Any]] = _load(TICKETS_FILE)
 _memories : dict[str, list[dict]]     = _load(MEMORIES_FILE)
 _dm_quota : dict[str, dict]           = _load(DM_QUOTA_FILE)
 
-# ── Strikes ───────────────────────────────────────────────────────────────────
+# ── Strikes ─────────────────────────────────────────────────────────────[...]
 
 async def get_strikes(user_id: int) -> int:
     async with _lock:
@@ -64,7 +64,7 @@ async def get_all_strikes() -> dict[str, int]:
     async with _lock:
         return dict(_strikes)
 
-# ── Tickets ───────────────────────────────────────────────────────────────────
+# ── Tickets ─────────────────────────────────────────────────────────────[...]
 
 def _gen_ticket_id() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -100,11 +100,40 @@ async def get_user_open_ticket(user_id: int) -> str | None:
 
 # ── Conversation Memory ───────────────────────────────────────────────────────
 
-MAX_EXCHANGES = 25   # keep last 25 pairs = 50 messages per user
+MAX_EXCHANGES = 50   # keep last 50 pairs = 100 messages per user
+
+def _summarize_old_exchanges(messages: list[dict], keep_recent: int = 15) -> list[dict]:
+    """
+    For very long conversations, summarize older exchanges to preserve context
+    while staying within token limits. Keeps the most recent messages intact.
+    """
+    if len(messages) <= keep_recent * 2:
+        return messages
+    
+    recent = messages[-(keep_recent * 2):]
+    old = messages[:-(keep_recent * 2)]
+    
+    # Create a concise summary of older messages
+    topics = []
+    for msg in old:
+        content = msg.get("content", "")
+        if len(content) > 5:
+            # Extract first 80 chars as topic summary
+            topics.append(content[:80])
+    
+    if topics:
+        summary_text = " | ".join(topics[:10])  # Keep last 10 topic summaries
+        return [
+            {"role": "system", "content": f"[Earlier conversation: {summary_text}...]"},
+            *recent
+        ]
+    return recent
 
 def get_memory(user_id: int) -> list[dict]:
     """Return stored message history for a user as OpenAI message dicts."""
-    return list(_memories.get(str(user_id), []))
+    messages = list(_memories.get(str(user_id), []))
+    # Apply memory summarization for very long conversations
+    return _summarize_old_exchanges(messages)
 
 def add_memory(user_id: int, role: str, content: str) -> None:
     """Append a message to history; trim to MAX_EXCHANGES * 2."""
@@ -124,7 +153,7 @@ async def clear_memory(user_id: int) -> None:
         _memories.pop(str(user_id), None)
         _save(MEMORIES_FILE, _memories)
 
-# ── DM Daily Quota ────────────────────────────────────────────────────────────
+# ── DM Daily Quota ─────────────────────────────────────────────────────────[...]
 
 DM_DAILY_LIMIT = 15   # synced with config.DM_DAILY_LIMIT
 

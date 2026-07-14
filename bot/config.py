@@ -1,6 +1,6 @@
 import os
 
-# ── Core credentials ──────────────────────────────────────────────────────────
+# ── Core credentials ─────────────────────────────────────────────────────────[...]
 DISCORD_TOKEN      : str = os.environ["DISCORD_TOKEN"]
 GEMINI_API_KEY     : str = os.environ["GEMINI_API_KEY"]
 GROQ_API_KEY       : str = os.environ.get("GROQ_API_KEY", "")
@@ -16,19 +16,19 @@ ADMIN_CHANNEL_ID : int = _parse_channel_id(os.environ["ADMIN_CHANNEL_ID"])
 LOG_CHANNEL_ID   : int = _parse_channel_id(os.environ["LOG_CHANNEL_ID"])
 SUPPORT_LINK     : str = os.environ["SUPPORT_LINK"]
 
-# ── Bot settings ──────────────────────────────────────────────────────────────
-BOT_PREFIX = "!"
+# ── Bot settings ──────────────────────────────────────────────────────────[...]
+BOT_PREFIX = "/"
 BOT_COLOR  = 0x5865F2
 COLOR_OK   = 0x23A55A
 COLOR_WARN = 0xF0B132
 COLOR_ERR  = 0xED4245
 COLOR_INFO = 0x5865F2
 
-# ── AI — Gemini ───────────────────────────────────────────────────────────────
-GEMINI_MODEL = "gemini-flash-latest"
+# ── AI — Gemini ───────────────────────────────────────────────────────────[...]
+GEMINI_MODEL = "gemini-2.0-flash"
 GEMINI_FALLBACK_MODELS = [
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash-8b",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
 ]
 
 # ── AI — OpenAI-compatible providers ─────────────────────────────────────────
@@ -41,9 +41,9 @@ CEREBRAS_URL     = "https://api.cerebras.ai/v1/chat/completions"
 OPENROUTER_MODEL = "meta-llama/llama-3.2-3b-instruct:free"
 OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
 
-# ── Limits & quotas ───────────────────────────────────────────────────────────
+# ── Limits & quotas ─────────────────────────────────────────────────────────[...]
 DM_DAILY_LIMIT       = 15    # free DM messages per user per day (owner = unlimited)
-MEMORY_MAX_EXCHANGES = 25    # conversation pairs stored per user (50 messages)
+MEMORY_MAX_EXCHANGES = 50    # conversation pairs stored per user (100 messages)
 
 # ── Moderation settings ───────────────────────────────────────────────────────
 STRIKES_FOR_BAN         = 3
