@@ -124,8 +124,11 @@ class General(commands.Cog, name="General"):
         )
 
         embed.add_field(name="🤖 AI", value=(
-            "`@Bot <question>` — Ask me anything (60 s cooldown)\n"
-            "`@Bot I'm being bullied by @user` — Trigger anti-bully investigation"
+            "`@Nexus <question>` — Ask anything (guild, 45 s cooldown)\n"
+            "`nexus <question>` — Say my name anywhere — no @ needed!\n"
+            "💬 **DM me directly** — unlimited private chat, I remember our history\n"
+            "`@Nexus I'm being bullied by @user` — Trigger anti-bully investigation\n"
+            "*Say* `forget me` *in DMs to clear your chat history*"
         ), inline=False)
 
         embed.add_field(name="⚠️ Moderation", value=(

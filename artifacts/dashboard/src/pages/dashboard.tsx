@@ -36,11 +36,26 @@ const getBadgeClasses = (level: string) => {
 
 const COMMANDS = [
   {
-    category: '🤖 AI',
+    category: '🤖 AI — Nexus Chat',
     color: '#5865F2',
     items: [
-      { usage: '@Bot <question>', desc: 'Ask the AI anything (60 s cooldown per user)' },
-      { usage: '@Bot I\'m being bullied by @user', desc: 'Report bullying — AI investigates recent messages and applies 30-min timeout if confirmed' },
+      { usage: '@Nexus <question>', desc: 'Mention Nexus anywhere in a guild (45 s cooldown). AI remembers your conversation history.' },
+      { usage: 'nexus <anything>', desc: 'No @ required — just say "nexus" anywhere in a message to get a response.' },
+      { usage: 'DM the bot', desc: 'Chat privately in DMs — no cooldown, full memory, friendly 1-on-1 AI conversation.' },
+      { usage: 'forget me  (in DMs)', desc: 'Say "forget me" in DMs to clear your conversation history and start fresh.' },
+      { usage: '@Nexus I\'m being bullied by @user', desc: 'Anti-bully investigation — AI reviews messages. High-confidence = 30-min timeout on accused, medium = staff alert.' },
+    ],
+  },
+  {
+    category: '🧠 AI Providers (auto-failover)',
+    color: '#9B59B6',
+    items: [
+      { usage: '1. Gemini Flash', desc: 'Primary — Google Gemini Flash (latest). Fastest, best quality.' },
+      { usage: '2. Gemini Flash Lite', desc: 'Fallback 2 — Gemini 2.0 Flash Lite. Lighter & faster.' },
+      { usage: '3. Gemini 1.5 Flash 8b', desc: 'Fallback 3 — Smallest Gemini model, lowest latency.' },
+      { usage: '4. Groq — Llama 3.1 8b', desc: 'Fallback 4 — Ultra-fast Llama inference via Groq.' },
+      { usage: '5. Cerebras — Llama 3.1 8b', desc: 'Fallback 5 — Cerebras wafer-scale inference engine.' },
+      { usage: '6. OpenRouter — Llama 3.2 3b', desc: 'Fallback 6 — OpenRouter free tier. Last resort, always available.' },
     ],
   },
   {

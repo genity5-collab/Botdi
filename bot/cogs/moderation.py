@@ -10,6 +10,7 @@ Logic     : 1 strike = 24 h timeout  |  3 strikes = ban
 
 from __future__ import annotations
 
+import re
 import time
 import datetime
 import discord
@@ -22,12 +23,46 @@ from config import (
     FILTER_COOLDOWN_SECONDS,
     BLACKLISTED_WORDS,
     BOT_COLOR,
+    COLOR_ERR,
+    COLOR_WARN,
+    COLOR_OK,
 )
 from data_store import add_strike, get_strikes, reset_strikes
 from utils import build_appeal_embed, log_action, parse_user_id
 
-# Pre-compile lower-case word set for fast lookup
-_BLACKLIST: set[str] = {w.lower() for w in BLACKLISTED_WORDS}
+# Pre-compile lower-case word list for fast lookup
+_BLACKLIST: list[str] = [w.lower() for w in BLACKLISTED_WORDS]
+
+# Emoji regex — Discord custom (<:name:id>) + common unicode emoji ranges
+_EMOJI_RE = re.compile(
+    r"<a?:[A-Za-z0-9_]+:\d+>"       # Discord custom emoji
+    r"|[\U0001F000-\U0001FAFF]"      # Extended emoji block
+    r"|[\U00010000-\U0010FFFF]"      # Supplementary (misc emoji)
+    r"|[\u2600-\u27BF]"              # Misc symbols
+    r"|[\u2300-\u23FF]",             # Misc technical
+    re.UNICODE,
+)
+
+def _strip_content(text: str) -> str:
+    """Remove emojis, mentions, URLs, and extra whitespace from a message."""
+    text = _EMOJI_RE.sub(" ", text)
+    text = re.sub(r"<@!?\d+>", " ", text)          # user mentions
+    text = re.sub(r"<#\d+>", " ", text)             # channel mentions
+    text = re.sub(r"https?://\S+", " ", text)        # URLs
+    return text.strip()
+
+def _find_blacklisted(text: str) -> str | None:
+    """
+    Return the first blacklisted word found in text using whole-word matching.
+    Returns None if no match (ignores partial matches like 'ass' in 'class').
+    """
+    clean = _strip_content(text).lower()
+    if len(clean) < 2:   # emoji-only or nearly empty after stripping
+        return None
+    for word in _BLACKLIST:
+        if re.search(r"\b" + re.escape(word) + r"\b", clean):
+            return word
+    return None
 
 
 class Moderation(commands.Cog, name="Moderation"):
@@ -90,22 +125,25 @@ class Moderation(commands.Cog, name="Moderation"):
             pass
 
     # ── Auto-mod listener ─────────────────────────────────────────────────────
+    # Smart checks:
+    #  • Strips emojis/mentions/URLs before scanning — emoji-only messages are ignored
+    #  • Whole-word boundary matching — "ass" in "classic" does NOT trigger
+    #  • 15 s cooldown per user to avoid spam-checking
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or not message.guild or not _BLACKLIST:
             return
 
-        now = time.monotonic()
+        now  = time.monotonic()
         last = self._filter_cooldowns.get(message.author.id, 0.0)
         if now - last < FILTER_COOLDOWN_SECONDS:
             return
         self._filter_cooldowns[message.author.id] = now
 
-        lower_content = message.content.lower()
-        triggered = next((w for w in _BLACKLIST if w in lower_content), None)
+        triggered = _find_blacklisted(message.content)
         if triggered is None:
-            return
+            return   # emoji-only, clean text, or no whole-word match
 
         member = message.author
         try:
@@ -113,24 +151,26 @@ class Moderation(commands.Cog, name="Moderation"):
         except discord.HTTPException:
             pass
 
-        until = discord.utils.utcnow() + datetime.timedelta(seconds=AUTOMOD_TIMEOUT_SECONDS)
+        until        = discord.utils.utcnow() + datetime.timedelta(seconds=AUTOMOD_TIMEOUT_SECONDS)
         action_taken = "1 h timeout applied"
         try:
-            await member.timeout(until, reason=f"Auto-mod: blacklisted word '{triggered}'")
+            await member.timeout(until, reason=f"Auto-mod: prohibited word")
         except discord.Forbidden:
             action_taken = "timeout failed (missing permissions)"
 
         try:
-            await member.send(
-                embed=discord.Embed(
-                    title="🔇 Auto-Moderation",
-                    description=(
-                        "Your message was removed for containing a prohibited word.\n"
-                        "You have been muted for **1 hour**."
-                    ),
-                    color=0xE74C3C,
-                )
+            dm_embed = discord.Embed(
+                title="🔇 Auto-Moderation",
+                description=(
+                    "Your message was removed because it contained a prohibited word.\n\n"
+                    "**Action:** 1-hour timeout\n"
+                    "Please review the server rules to avoid further action."
+                ),
+                color=COLOR_ERR,
+                timestamp=discord.utils.utcnow(),
             )
+            dm_embed.set_footer(text="Nexus Auto-Mod • Repeated violations lead to a strike")
+            await member.send(embed=dm_embed)
         except discord.HTTPException:
             pass
 
@@ -138,6 +178,7 @@ class Moderation(commands.Cog, name="Moderation"):
             self.bot,
             "🔇 Auto-Mod Timeout",
             f"**User:** {member.mention} (`{member.id}`)\n"
+            f"**Channel:** {message.channel.mention}\n"
             f"**Trigger:** `{triggered}`\n"
             f"**Action:** {action_taken}",
         )
