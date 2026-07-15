@@ -17,7 +17,7 @@ LOG_CHANNEL_ID   : int = _parse_channel_id(os.environ["LOG_CHANNEL_ID"])
 SUPPORT_LINK     : str = os.environ["SUPPORT_LINK"]
 
 # ── Bot settings ──────────────────────────────────────────────────────────[...]
-BOT_PREFIX = "/"
+BOT_PREFIX = "."
 BOT_COLOR  = 0x5865F2
 COLOR_OK   = 0x23A55A
 COLOR_WARN = 0xF0B132
