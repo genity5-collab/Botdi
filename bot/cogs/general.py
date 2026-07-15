@@ -13,7 +13,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from config import BOT_COLOR
-from utils import parse_user_id
 
 
 class General(commands.Cog, name="General"):
@@ -52,18 +51,15 @@ class General(commands.Cog, name="General"):
         """Show information about a user."""
         await interaction.response.defer()
         
-        if target_str is None:
-            member = interaction.user
-        else:
-            member = target
-            if isinstance(member, discord.User) and interaction.guild:
-                try:
-                    member = await interaction.guild.fetch_member(member.id)
-                except discord.NotFound:
-                    await interaction.followup.send("❌ Member not found in this server.")
-                    return
+        member = target or interaction.user
+        if isinstance(member, discord.User) and interaction.guild:
+            try:
+                member = await interaction.guild.fetch_member(member.id)
+            except discord.NotFound:
+                await interaction.followup.send("❌ Member not found in this server.")
+                return
 
-        roles = [r.mention for r in member.roles if r != interaction.guild.default_role] if hasattr(member, 'roles') and interaction.guild else []
+        roles = [r.mention for r in member.roles if hasattr(member, 'roles') and r != interaction.guild.default_role] if interaction.guild and hasattr(member, 'roles') else []
         joined = discord.utils.format_dt(member.joined_at, style="R") if hasattr(member, 'joined_at') and member.joined_at else "Unknown"
         created = discord.utils.format_dt(member.created_at, style="R")
 
@@ -105,6 +101,60 @@ class General(commands.Cog, name="General"):
             embed.set_thumbnail(url=g.icon.url)
         embed.add_field(name="Owner", value=g.owner.mention if g.owner else "Unknown", inline=True)
         embed.add_field(name="Created", value=created, inline=True)
+        embed.add_field(name="Members", value=f"{humans} humans · {bots} bots", inline=True)
+        embed.add_field(name="Channels", value=f"{len(g.text_channels)} text · {len(g.voice_channels)} voice", inline=True)
+        embed.add_field(name="Roles", value=str(len(g.roles)), inline=True)
+        embed.add_field(name="Boost Level", value=f"Level {g.premium_tier}", inline=True)
+        if g.description:
+            embed.add_field(name="Description", value=g.description, inline=False)
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="help", description="Show all available commands.")
+    async def help_cmd(self, interaction: discord.Interaction) -> None:
+        """Show all available commands."""
+        embed = discord.Embed(
+            title="📖 Command Reference",
+            description="All available slash commands",
+            color=BOT_COLOR,
+        )
+
+        embed.add_field(name="🤖 AI", value=(
+            "`/ask <question>` — Ask anything\n"
+            "`/forget` — Clear your chat history"
+        ), inline=False)
+
+        embed.add_field(name="⚠️ Moderation", value=(
+            "`/strike <user> [reason]` — Issue a strike\n"
+            "`/strikes <user>` — View strike count\n"
+            "`/mute <user> [minutes]` — Timeout a user\n"
+            "`/unmute <user>` — Remove timeout\n"
+            "`/kick <user> [reason]` — Kick a member\n"
+            "`/ban <user> [reason]` — Ban a member"
+        ), inline=False)
+
+        embed.add_field(name="🎮 Fun", value=(
+            "`/roll [sides]` — Roll a die\n"
+            "`/flip` — Coin flip\n"
+            "`/8ball <question>` — Magic 8-ball\n"
+            "`/poll <question>` — Yes/no poll\n"
+            "`/avatar [user]` — Show avatar\n"
+            "`/botinfo` — Bot stats"
+        ), inline=False)
+
+        embed.add_field(name="ℹ️ General", value=(
+            "`/ping` — Check latency\n"
+            "`/uptime` — Show uptime\n"
+            "`/userinfo [user]` — Show user info\n"
+            "`/serverinfo` — Show server info\n"
+            "`/help` — This menu"
+        ), inline=False)
+
+        embed.set_footer(text="Type / in Discord to see commands")
+        await interaction.response.send_message(embed=embed)
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(General(bot))        embed.add_field(name="Created", value=created, inline=True)
         embed.add_field(name="Members", value=f"{humans} humans · {bots} bots", inline=True)
         embed.add_field(name="Channels", value=f"{len(g.text_channels)} text · {len(g.voice_channels)} voice", inline=True)
         embed.add_field(name="Roles", value=str(len(g.roles)), inline=True)
