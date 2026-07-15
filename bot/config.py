@@ -32,7 +32,7 @@ GEMINI_FALLBACK_MODELS = [
 ]
 
 # ── AI — OpenAI-compatible providers ─────────────────────────────────────────
-GROQ_MODEL       = "qwen/qwen3.6-27b"
+GROQ_MODEL       = "meta-llama/llama-4-scout-17b-16e-instruct"
 GROQ_URL         = "https://api.groq.com/openai/v1/chat/completions"
 
 CEREBRAS_MODEL   = "llama3.1-8b"
