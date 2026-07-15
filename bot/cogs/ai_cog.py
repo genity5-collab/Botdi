@@ -475,18 +475,12 @@ class AICog(commands.Cog, name="AI"):
         if is_dm and not is_owner:
             allowed, remaining = check_dm_quota(user.id)
             if not allowed:
-                embed = discord.Embed(
-                    title="💬 Daily Limit Reached",
-                    description=(
-                        f"You've used all **{DM_DAILY_LIMIT}** of your daily DM messages.\n"
-                        "Your quota resets at **midnight UTC**. See you then! 🌙\n\n"
-                        "*Tip: you can mention me in the server anytime — no limits there!*"
-                    ),
-                    color=COLOR_WARN,
-                    timestamp=discord.utils.utcnow(),
+                await message.reply(
+                    f"💬 **Daily Limit Reached**\n"
+                    f"You've used all **{DM_DAILY_LIMIT}** of your daily DM messages.\n"
+                    f"Your quota resets at **midnight UTC**. See you then! 🌙\n\n"
+                    f"*Tip: you can mention me in the server anytime — no limits there!*"
                 )
-                embed.set_footer(text="Botdi AI • Daily limit")
-                await message.reply(embed=embed)
                 return
 
         # ── Empty query ───────────────────────────────────────────────────────–[...]
