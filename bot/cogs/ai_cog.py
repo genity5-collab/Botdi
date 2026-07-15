@@ -609,15 +609,10 @@ class AICog(commands.Cog, name="AI"):
             color=BOT_COLOR,
             timestamp=discord.utils.utcnow(),
         )
-        embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
-        embed.set_footer(text=footer)
-        await message.reply(embed=embed)
-
-    # ── Anti-bully investigation ───────────────────────────────────────────────
-
-    async def _investigate_bullying(
-        self,
-        report_msg: discord.Message,
+        # Send plain text response (allows longer messages)
+        mention = f"**{user.display_name}:** " if not isinstance(message.channel, discord.DMChannel) else ""
+        footer_text = f"\n\n*{footer}*"
+        await message.reply(f"{mention}{reply_text}{footer_text}")
         reporter: discord.Member,
         accused: discord.Member,
     ) -> None:
