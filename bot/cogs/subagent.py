@@ -694,8 +694,13 @@ class Subagent(commands.Cog, name="Subagent"):
                         SUBAGENT_SYSTEM, chat_messages, tools_json,
                     )
                     if result is None:
-                        final_text = "No AI provider available for function-calling."
-                        break
+                        # Last resort: text-based function calling (works with any model)
+                        result = await ai_providers.text_function_call(
+                            SUBAGENT_SYSTEM, chat_messages, tools_json,
+                        )
+                        if result is None:
+                            final_text = "No AI provider available for function-calling."
+                            break
 
                     tool_calls = result.get("tool_calls")
                     if not tool_calls:
