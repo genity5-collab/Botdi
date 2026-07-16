@@ -1,7 +1,7 @@
 """
-Nexus AI Cog
+Vyrion AI Cog
 ────────────
-- Responds to DMs, @mentions, and messages starting with "nexus"
+- Responds to DMs, @mentions, and messages starting with "vyrion"
 - Plain-text replies (no embeds) auto-chunked at 2000 chars
 - Persistent per-user conversation memory
 - Per-guild taught knowledge via /teach (admin-only)
@@ -22,6 +22,7 @@ from discord.ext import commands
 
 from config import (
     DM_DAILY_LIMIT,
+    BOT_NAME,
 )
 from data_store import (
     get_memory,
@@ -38,10 +39,9 @@ from utils import check_profanity_at_bot, check_pii_tos
 import roblox as roblox_api
 import ai_providers
 
-log = logging.getLogger("nexus.ai")
+log = logging.getLogger("vyrion.ai")
 
-BOT_NAME = "Nexus"
-NAME_TRIGGER = re.compile(r"^\s*nexus[\s,:!?]+", re.I)
+NAME_TRIGGER = re.compile(rf"^\s*{BOT_NAME}[\s,:!?]+", re.I)
 DISCORD_MSG_CAP = 2000
 IMAGE_MIME = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
@@ -255,7 +255,7 @@ class AI(commands.Cog, name="AI"):
             prompt = "Hi!"
         await self._respond(message, prompt or "(image only)")
 
-    @app_commands.command(name="ask", description="Ask Nexus anything.")
+    @app_commands.command(name="ask", description="Ask Vyrion anything.")
     @app_commands.describe(question="Your question")
     async def ask_cmd(self, interaction: discord.Interaction, question: str) -> None:
         await interaction.response.defer(thinking=True)
@@ -270,13 +270,13 @@ class AI(commands.Cog, name="AI"):
         for ch in chunks[1:]:
             await interaction.followup.send(ch)
 
-    @app_commands.command(name="forget", description="Clear your conversation history with Nexus.")
+    @app_commands.command(name="forget", description="Clear your conversation history with Vyrion.")
     async def forget_cmd(self, interaction: discord.Interaction) -> None:
         await clear_memory(interaction.user.id)
         await interaction.response.send_message("🧠 Your memory with me is cleared.", ephemeral=True)
 
-    @app_commands.command(name="teach", description="Teach Nexus a fact about this server (admins).")
-    @app_commands.describe(fact="A fact, rule, or context Nexus should remember for this server.")
+    @app_commands.command(name="teach", description="Teach Vyrion a fact about this server (admins).")
+    @app_commands.describe(fact="A fact, rule, or context Vyrion should remember for this server.")
     @app_commands.default_permissions(manage_guild=True)
     async def teach_cmd(self, interaction: discord.Interaction, fact: str) -> None:
         if not interaction.guild:
@@ -291,7 +291,7 @@ class AI(commands.Cog, name="AI"):
             ephemeral=True,
         )
 
-    @app_commands.command(name="untutor", description="Clear all facts Nexus was taught for this server (admins).")
+    @app_commands.command(name="untutor", description="Clear all facts Vyrion was taught for this server (admins).")
     @app_commands.default_permissions(manage_guild=True)
     async def untutor_cmd(self, interaction: discord.Interaction) -> None:
         if not interaction.guild:

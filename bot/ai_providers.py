@@ -35,7 +35,7 @@ from config import (
     HUGGINGFACE_API_KEY,
 )
 
-log = logging.getLogger("nexus.ai_providers")
+log = logging.getLogger("vyrion.ai_providers")
 
 # ── Gemini client (lazy) ──────────────────────────────────────────────────────
 
@@ -310,3 +310,88 @@ def get_genai_types():
 def is_gemini_available() -> bool:
     c, _ = _get_gemini()
     return c is not None
+
+
+# ── OpenAI-compatible function calling (Groq, OpenRouter, Cerebras) ────────────
+
+async def openai_function_call(
+    system_prompt: str,
+    messages: list[dict],
+    tools_json: list[dict],
+    *,
+    temperature: float = 0.7,
+    max_tokens: int = 1200,
+) -> dict | None:
+    """
+    Call an OpenAI-compatible /chat/completions endpoint with tool calling.
+    Tries Groq → OpenRouter → Cerebras (whichever keys are configured).
+
+    Returns a dict with:
+      'tool_calls': list of {'name': str, 'arguments': dict} or None
+      'content': str (text reply if no tool calls)
+    or None if no provider is available / all fail.
+    """
+    rest_messages = [{"role": "system", "content": system_prompt}] + messages
+    openai_tools = [{"type": "function", "function": t} for t in tools_json]
+
+    providers = []
+    if GROQ_API_KEY:
+        providers.append((GROQ_URL, GROQ_API_KEY, GROQ_MODEL))
+    if OPENROUTER_API_KEY:
+        providers.append((OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL))
+    if CEREBRAS_API_KEY:
+        providers.append((CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL))
+
+    for url, key, model in providers:
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "messages": rest_messages,
+            "tools": openai_tools,
+            "tool_choice": "auto",
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url, headers=headers, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        log.warning("function-call %s returned %d: %s", url, resp.status, body[:300])
+                        continue
+                    data = await resp.json()
+                    choice = data.get("choices", [{}])[0]
+                    msg = choice.get("message", {})
+                    tool_calls_raw = msg.get("tool_calls")
+                    content = msg.get("content") or ""
+
+                    if tool_calls_raw:
+                        parsed_calls = []
+                        for tc in tool_calls_raw:
+                            fn = tc.get("function", {})
+                            fn_name = fn.get("name", "")
+                            fn_args_str = fn.get("arguments", "{}")
+                            try:
+                                fn_args = json.loads(fn_args_str) if isinstance(fn_args_str, str) else fn_args_str
+                            except json.JSONDecodeError:
+                                fn_args = {}
+                            parsed_calls.append({"name": fn_name, "arguments": fn_args})
+                        return {"tool_calls": parsed_calls, "content": ""}
+
+                    return {"tool_calls": None, "content": content.strip()}
+        except Exception as e:
+            log.warning("function-call %s failed: %s", url, e)
+            continue
+
+    return None
+
+
+def is_any_provider_available() -> bool:
+    """Check if at least one AI provider is configured."""
+    return bool(GEMINI_API_KEY or GROQ_API_KEY or OPENROUTER_API_KEY or CEREBRAS_API_KEY or HUGGINGFACE_API_KEY)
