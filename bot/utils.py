@@ -1,10 +1,15 @@
+"""
+Shared utilities: action logging, appeal embeds, PII / TOS filter, profanity guard.
+"""
+
+from __future__ import annotations
+
 import re
-import logging
-from typing import Any
+import discord
+from config import LOG_CHANNEL_ID, SUPPORT_LINK, BOT_COLOR
 
-log = logging.getLogger("vyrion.utils")
 
-# ── PII / sensitive-content detection ──────────────────────────────────────────
+# ── PII patterns ──────────────────────────────────────────────────────────────
 
 _PII_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("email address",    re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")),
@@ -49,43 +54,80 @@ _PROFANITY: set[str] = {
     "stfu", "shut the fuck up",
 }
 
+# Words to scrub from AI output (replaced with ***)
+_OUTPUT_PROFANITY = re.compile(
+    r"\b(fuck(?:ing)?|shit|bitch|bastard|cunt|asshole|dick|motherfuck(?:er|ing)?|"
+    r"retard(?:ed)?|faggot|whore|slut|cock|piss)\b",
+    re.I,
+)
+
 
 def check_pii_tos(text: str) -> tuple[bool, str]:
-    """Return (True, reason) if text contains PII or TOS-violating content."""
+    """Returns (violated, reason). True if PII or TOS content detected."""
+    for label, pattern in _PII_PATTERNS:
+        if pattern.search(text):
+            return True, f"Contains {label}"
     lower = text.lower()
     for kw in _TOS_KEYWORDS:
         if kw in lower:
-            return True, f"TOS violation ({kw.strip()})"
-    for label, pat in _PII_PATTERNS:
-        if pat.search(text):
-            return True, f"contains {label}"
+            return True, f"Possible TOS violation: '{kw.strip()}'"
     return False, ""
 
 
 def check_profanity_at_bot(text: str) -> bool:
-    """Return True if text contains profanity aimed at the bot."""
+    """True if the message contains profanity targeted at the bot."""
     lower = text.lower()
     return any(word in lower for word in _PROFANITY)
 
 
-# ── Logging ────────────────────────────────────────────────────────────────────
+def clean_ai_output(text: str, max_len: int = 380) -> str:
+    """Strip profanity from AI output and enforce length cap."""
+    text = _OUTPUT_PROFANITY.sub("***", text)
+    if len(text) > max_len:
+        text = text[:max_len].rsplit(" ", 1)[0] + "…"
+    return text
 
-async def log_action(bot, title: str, description: str, color: int = 0x5865F2) -> None:
-    """Send an embed to the log channel."""
-    import discord
-    channel = bot.get_channel(LOG_CHANNEL_ID) if hasattr(bot, 'get_channel') else None
+
+# ── Appeal embed ──────────────────────────────────────────────────────────────
+
+def build_appeal_embed(reason: str = "") -> discord.Embed:
+    embed = discord.Embed(
+        title="⚖️ Moderation Action",
+        description=(
+            f"**Reason:** {reason or 'Violation of server rules'}\n\n"
+            "You may appeal this action using the link below."
+        ),
+        color=BOT_COLOR,
+    )
+    embed.add_field(name="📋 Appeal", value=f"[Submit an appeal]({SUPPORT_LINK})", inline=False)
+    embed.set_footer(text="Appeals are reviewed within 48 hours.")
+    return embed
+
+
+# ── Action log ────────────────────────────────────────────────────────────────
+
+async def log_action(bot: discord.Client, title: str, description: str, color: int = 0xE74C3C) -> None:
+    """Send a log embed to LOG_CHANNEL_ID."""
+    channel = bot.get_channel(LOG_CHANNEL_ID)
     if channel is None:
-        try:
-            channel = await bot.fetch_channel(LOG_CHANNEL_ID)
-        except Exception:
-            return
-    if channel:
-        embed = discord.Embed(title=title, description=description, color=color)
+        return
+    embed = discord.Embed(title=title, description=description, color=color)
+    try:
         await channel.send(embed=embed)
+    except discord.HTTPException:
+        pass
 
 
-# Late import to avoid circular dependency
-try:
-    from config import LOG_CHANNEL_ID
-except ImportError:
-    LOG_CHANNEL_ID = 0
+# ── ID validation ─────────────────────────────────────────────────────────────
+
+def parse_user_id(argument: str) -> int | None:
+    """
+    Parse a Discord user ID from a mention (<@123>) or a raw integer string.
+    Returns the integer ID, or None if invalid.
+    """
+    mention_match = re.match(r"<@!?(\d{17,20})>", argument)
+    if mention_match:
+        return int(mention_match.group(1))
+    if re.match(r"^\d{17,20}$", argument):
+        return int(argument)
+    return None
