@@ -227,7 +227,7 @@ class AI(commands.Cog, name="AI"):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
-        if not message.content and not message.attachments:
+        if not message.content and not message.attachments and not message.stickers:
             return
 
         content = message.content or ""
@@ -252,7 +252,10 @@ class AI(commands.Cog, name="AI"):
         if m:
             prompt = content[m.end():].strip()
         if not prompt and not message.attachments:
-            prompt = "Hi!"
+            if message.stickers:
+                prompt = "[user sent a sticker]"
+            else:
+                prompt = "Hi!"
         await self._respond(message, prompt or "(image only)")
 
     @app_commands.command(name="ask", description="Ask Vyrion anything.")
