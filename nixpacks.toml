@@ -1,0 +1,14 @@
+# This file tells Railway/Nixpacks to treat this as a Python project
+# and ignore the root package.json (which is a Replit PNPM workspace).
+
+[phases.setup]
+aptPkgs = ['python3', 'python3-pip', 'python3-venv']
+
+[phases.install]
+cmds = [
+  'python3 -m venv /opt/venv',
+  '/opt/venv/bin/pip install --no-cache-dir -r bot/requirements.txt'
+]
+
+[start]
+cmd = '/opt/venv/bin/python3 bot/main.py'
