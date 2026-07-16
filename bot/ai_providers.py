@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 import aiohttp
@@ -112,7 +113,6 @@ async def _huggingface_chat(
 ) -> str:
     if not HUGGINGFACE_API_KEY:
         return ""
-    # Build a conversational prompt from messages
     system_parts = [m["content"] for m in messages if m["role"] == "system"]
     convo_parts = []
     for m in messages:
@@ -179,7 +179,6 @@ async def _gemini_generate(
         role = "user" if m["role"] == "user" else "model"
         contents.append(gt.Content(role=role, parts=[gt.Part.from_text(text=m["content"])]))
 
-    # Last user message gets image parts appended
     user_parts = [gt.Part.from_text(text=messages[-1]["content"] if messages else "")]
     for data, mime in (image_parts or []):
         user_parts.append(gt.Part.from_bytes(data=data, mime_type=mime))
@@ -224,7 +223,6 @@ async def generate(
     Generate a text reply using the first provider that succeeds.
     Providers are tried in order: Gemini → Groq → OpenRouter → HuggingFace → Cerebras.
     """
-    # 1. Gemini (supports vision)
     if GEMINI_API_KEY:
         text = await _gemini_generate(
             system_prompt, messages,
@@ -234,10 +232,8 @@ async def generate(
         if text:
             return text
 
-    # Build OpenAI-style messages for REST providers
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
 
-    # 2. Groq
     if GROQ_API_KEY:
         text = await _openai_compat_chat(
             GROQ_URL, GROQ_API_KEY, GROQ_MODEL, rest_messages,
@@ -246,7 +242,6 @@ async def generate(
         if text:
             return text
 
-    # 3. OpenRouter
     if OPENROUTER_API_KEY:
         text = await _openai_compat_chat(
             OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL, rest_messages,
@@ -255,7 +250,6 @@ async def generate(
         if text:
             return text
 
-    # 4. Hugging Face
     if HUGGINGFACE_API_KEY:
         text = await _huggingface_chat(
             rest_messages, temperature=temperature, max_tokens=max_tokens,
@@ -263,7 +257,6 @@ async def generate(
         if text:
             return text
 
-    # 5. Cerebras
     if CEREBRAS_API_KEY:
         text = await _openai_compat_chat(
             CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL, rest_messages,
@@ -282,10 +275,7 @@ async def gemini_function_call(
     contents: list,
     tools: list,
 ) -> Any:
-    """
-    Call Gemini with function-calling support. Returns the raw response object
-    or None if Gemini is not available.
-    """
+    """Call Gemini with function-calling support."""
     client, gt = _get_gemini()
     if client is None or gt is None:
         return None
@@ -390,6 +380,87 @@ async def openai_function_call(
             continue
 
     return None
+
+
+# ── Text-based function calling fallback (works with ANY model) ───────────────
+
+async def text_function_call(
+    system_prompt: str,
+    messages: list[dict],
+    tools_json: list[dict],
+    *,
+    temperature: float = 0.7,
+    max_tokens: int = 1200,
+) -> dict | None:
+    """
+    Text-based function calling fallback for models without native tool calling.
+    Injects tool schemas into the system prompt and parses JSON from the response.
+
+    Returns a dict with:
+      'tool_calls': list of {'name': str, 'arguments': dict} or None
+      'content': str (text reply if no tool calls)
+    or None if no provider is available / all fail.
+    """
+    tool_descriptions = "\n".join(
+        f"- {t['name']}: {t['description']}\n  params: {json.dumps(t['parameters'])}"
+        for t in tools_json
+    )
+
+    injected_system = (
+        f"{system_prompt}\n\n"
+        "You have access to these functions:\n"
+        f"{tool_descriptions}\n\n"
+        "To call a function, respond with ONLY a JSON code block like:\n"
+        '```json\n[{"name": "function_name", "arguments": {"key": "value"}}]\n```\n'
+        "You can call multiple functions at once by putting them in the JSON array.\n"
+        "After functions are executed, you will receive their results and can continue.\n"
+        "If no function is needed, respond normally with text.\n"
+    )
+
+    rest_messages = [{"role": "system", "content": injected_system}] + messages
+
+    text = ""
+    if GROQ_API_KEY:
+        text = await _openai_compat_chat(
+            GROQ_URL, GROQ_API_KEY, GROQ_MODEL, rest_messages,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+    if not text and OPENROUTER_API_KEY:
+        text = await _openai_compat_chat(
+            OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL, rest_messages,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+    if not text and CEREBRAS_API_KEY:
+        text = await _openai_compat_chat(
+            CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL, rest_messages,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+    if not text and HUGGINGFACE_API_KEY:
+        text = await _huggingface_chat(
+            rest_messages, temperature=temperature, max_tokens=max_tokens,
+        )
+
+    if not text:
+        return None
+
+    json_blocks = re.findall(r'```(?:json)?\s*(\[.*?\])\s*```', text, re.DOTALL)
+    if not json_blocks:
+        bare = re.match(r'\s*(\[.*?\])\s*$', text, re.DOTALL)
+        if bare:
+            json_blocks = [bare.group(1)]
+
+    if json_blocks:
+        try:
+            calls = json.loads(json_blocks[0])
+            if isinstance(calls, list) and calls and isinstance(calls[0], dict) and "name" in calls[0]:
+                parsed = []
+                for c in calls:
+                    parsed.append({"name": c.get("name", ""), "arguments": c.get("arguments", {})})
+                return {"tool_calls": parsed, "content": ""}
+        except json.JSONDecodeError:
+            pass
+
+    return {"tool_calls": None, "content": text.strip()}
 
 
 def is_any_provider_available() -> bool:
