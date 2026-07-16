@@ -1,0 +1,13 @@
+node_modules
+artifacts
+.pnpm-store
+.local
+dist
+tmp
+out-tsc
+*.tsbuildinfo
+pnpm-lock.yaml
+package.json
+package-lock.json
+.git
+.cache

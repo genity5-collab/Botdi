@@ -36,6 +36,7 @@ class Nexus(commands.Bot):
             "cogs.moderation",
             "cogs.admin",
             "cogs.support",
+            "cogs.subagent",
         ):
             try:
                 await self.load_extension(ext)

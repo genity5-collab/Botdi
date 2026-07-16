@@ -116,6 +116,10 @@ class General(commands.Cog, name="General"):
             "`/roblox <kind> [query]` — Live Roblox lookup (game/user/trending)\n"
             "*Or @mention me, say `nexus …`, or DM me — I understand images too.*"
         ), inline=False)
+        embed.add_field(name="🤖 Subagent", value=(
+            "`/subagent <prompt>` — Admin: AI performs Discord actions from text\n"
+            "Creates channels, roles, sends messages, and more. Includes live edit log."
+        ), inline=False)
         embed.add_field(name="⚠️ Moderation", value=(
             "`/strike` `/strikes` `/mute` `/unmute` `/warn` "
             "`/kick` `/ban` `/purge` `/slowmode` `/lock` `/unlock`"

@@ -32,6 +32,15 @@ class JsonFileHandler(logging.Handler):
             pass
 
 
+def setup_logging() -> None:
+    """Configure root logging and attach the JSON handler."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    install()
+
+
 def install() -> None:
     """Attach the JSON handler to the root logger."""
     handler = JsonFileHandler()
