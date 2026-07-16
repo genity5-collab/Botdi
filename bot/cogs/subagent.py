@@ -24,25 +24,28 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import GEMINI_MODEL, LOG_CHANNEL_ID, BOT_COLOR, COLOR_OK, COLOR_ERR, BOT_OWNER_ID
+from config import GEMINI_MODEL, LOG_CHANNEL_ID, BOT_COLOR, COLOR_OK, COLOR_ERR, BOT_OWNER_ID, BOT_NAME
 from utils import log_action
 import ai_providers
 
-log = logging.getLogger("nexus.subagent")
+log = logging.getLogger("vyrion.subagent")
 
 genai_types = ai_providers.get_genai_types()
 
 
 SUBAGENT_SYSTEM = (
-    "You are Nexus Subagent, an AI assistant that manages Discord servers. "
-    "You receive instructions from the bot owner and call functions to execute "
-    "Discord actions: create channels, categories, roles, scheduled events, "
-    "send messages, send embeds, add roles to users, rename channels, set slowmode, "
-    "delete channels, create voice channels, and more. "
-    "Always call the appropriate function(s) to fulfill the request. "
-    "If a request is ambiguous, make a reasonable choice and proceed. "
-    "Never refuse a valid owner request. After executing actions, "
-    "summarize what you did in 1-3 sentences."
+    f"You are {BOT_NAME} Subagent, an AI assistant that manages Discord servers by calling functions. "
+    "You receive instructions from the bot owner and you MUST call the appropriate function(s) to execute them. "
+    "NEVER just describe what you would do — ALWAYS actually call the functions. "
+    "You have functions to: create text/voice/forum/announcement/stage channels, create categories, "
+    "create roles, send messages, send embeds, add/remove roles from users, rename channels, set slowmode, "
+    "set channel topics, delete channels, create/edit/delete scheduled events, create invites, "
+    "kick/ban/timeout members, and send DMs. "
+    "When the user asks you to do something, immediately call the function(s) that accomplish it. "
+    "Do not ask for confirmation. Do not explain what you're about to do. Just call the functions. "
+    "If a request involves multiple steps, call all the functions in sequence. "
+    "If a parameter is ambiguous, make a reasonable choice and proceed — never refuse. "
+    "After all functions are called, give a brief 1-2 sentence summary of what was done."
 )
 
 MAX_ROUNDS = 8
@@ -172,6 +175,91 @@ def _build_tools() -> list:
     ])]
 
 
+def _build_tools_json() -> list[dict]:
+    """Build OpenAI-compatible tool schemas for the fallback function-calling path."""
+    def t(name, desc, props, required):
+        return {
+            "name": name,
+            "description": desc,
+            "parameters": {
+                "type": "object",
+                "properties": props,
+                "required": required,
+            },
+        }
+    return [
+        t("create_text_channel", "Create a new text channel.", {
+            "name": {"type": "string"}, "category": {"type": "string"}, "topic": {"type": "string"},
+        }, ["name"]),
+        t("create_voice_channel", "Create a new voice channel.", {
+            "name": {"type": "string"}, "category": {"type": "string"}, "user_limit": {"type": "integer"},
+        }, ["name"]),
+        t("create_category", "Create a new channel category.", {"name": {"type": "string"}}, ["name"]),
+        t("create_role", "Create a new role.", {
+            "name": {"type": "string"}, "color": {"type": "string"},
+            "hoist": {"type": "boolean"}, "mentionable": {"type": "boolean"},
+        }, ["name"]),
+        t("send_message", "Send a text message to a channel.", {
+            "channel_name": {"type": "string"}, "content": {"type": "string"},
+        }, ["channel_name", "content"]),
+        t("send_embed", "Send a rich embed to a channel.", {
+            "channel_name": {"type": "string"}, "title": {"type": "string"},
+            "description": {"type": "string"}, "color": {"type": "string"},
+            "footer": {"type": "string"}, "image_url": {"type": "string"}, "thumbnail_url": {"type": "string"},
+        }, ["channel_name", "title", "description"]),
+        t("add_role_to_user", "Assign a role to a user.", {
+            "role_name": {"type": "string"}, "user": {"type": "string"},
+        }, ["role_name", "user"]),
+        t("remove_role_from_user", "Remove a role from a user.", {
+            "role_name": {"type": "string"}, "user": {"type": "string"},
+        }, ["role_name", "user"]),
+        t("rename_channel", "Rename a channel.", {
+            "current_name": {"type": "string"}, "new_name": {"type": "string"},
+        }, ["current_name", "new_name"]),
+        t("set_slowmode", "Set slowmode on a text channel.", {
+            "channel_name": {"type": "string"}, "seconds": {"type": "integer"},
+        }, ["channel_name", "seconds"]),
+        t("delete_channel", "Delete a channel by name.", {"channel_name": {"type": "string"}}, ["channel_name"]),
+        t("create_scheduled_event", "Create a scheduled event in the server.", {
+            "name": {"type": "string"}, "description": {"type": "string"},
+            "start_time": {"type": "string"}, "end_time": {"type": "string"},
+            "channel_name": {"type": "string"}, "location": {"type": "string"},
+        }, ["name", "start_time"]),
+        t("edit_scheduled_event", "Edit an existing scheduled event.", {
+            "event_name": {"type": "string"}, "new_name": {"type": "string"},
+            "new_description": {"type": "string"}, "new_start_time": {"type": "string"},
+        }, ["event_name"]),
+        t("delete_scheduled_event", "Delete a scheduled event by name.", {"event_name": {"type": "string"}}, ["event_name"]),
+        t("create_forum_channel", "Create a forum channel.", {
+            "name": {"type": "string"}, "category": {"type": "string"}, "topic": {"type": "string"},
+        }, ["name"]),
+        t("create_announcement_channel", "Create an announcement channel.", {
+            "name": {"type": "string"}, "category": {"type": "string"}, "topic": {"type": "string"},
+        }, ["name"]),
+        t("create_stage_channel", "Create a stage channel.", {
+            "name": {"type": "string"}, "category": {"type": "string"},
+        }, ["name"]),
+        t("set_channel_topic", "Set the topic of a text channel.", {
+            "channel_name": {"type": "string"}, "topic": {"type": "string"},
+        }, ["channel_name", "topic"]),
+        t("create_invite", "Create an invite for a channel.", {
+            "channel_name": {"type": "string"}, "max_age": {"type": "integer"}, "max_uses": {"type": "integer"},
+        }, ["channel_name"]),
+        t("kick_member", "Kick a member from the server.", {
+            "user": {"type": "string"}, "reason": {"type": "string"},
+        }, ["user"]),
+        t("ban_member", "Ban a member from the server.", {
+            "user": {"type": "string"}, "reason": {"type": "string"},
+        }, ["user"]),
+        t("timeout_member", "Timeout a member.", {
+            "user": {"type": "string"}, "minutes": {"type": "integer"}, "reason": {"type": "string"},
+        }, ["user", "minutes"]),
+        t("send_dm", "Send a DM to a server member.", {
+            "user": {"type": "string"}, "content": {"type": "string"},
+        }, ["user", "content"]),
+    ]
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _hex_to_int(color_hex: str) -> int:
@@ -272,10 +360,10 @@ class Subagent(commands.Cog, name="Subagent"):
             await interaction.followup.send("Bot owner ID not configured. Administrators may use this temporarily.", ephemeral=True)
             return
 
-        if not ai_providers.is_gemini_available():
+        if not ai_providers.is_any_provider_available():
             await interaction.followup.send(
-                "AI function-calling requires Gemini (google-genai). "
-                "Configure GEMINI_API_KEY to use /subagent."
+                "No AI provider is configured. Set at least one of: "
+                "GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, CEREBRAS_API_KEY, HUGGINGFACE_API_KEY"
             )
             return
 
@@ -558,39 +646,72 @@ class Subagent(commands.Cog, name="Subagent"):
                 return msg
 
         try:
-            contents = [
-                genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=prompt)]),
-            ]
-            tools = _build_tools()
-
             final_text = ""
-            for _ in range(MAX_ROUNDS):
-                response = await ai_providers.gemini_function_call(
-                    SUBAGENT_SYSTEM, contents, tools,
-                )
-                if response is None:
-                    final_text = "AI function-calling is not available (Gemini not configured)."
-                    break
+            use_gemini = ai_providers.is_gemini_available() and genai_types is not None
 
-                if not response.function_calls:
-                    final_text = response.text or "Done."
-                    break
+            if use_gemini:
+                # ── Gemini function-calling path ────────────────────────────────
+                contents = [
+                    genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=prompt)]),
+                ]
+                tools = _build_tools()
 
-                fc_parts = []
-                for fc in response.function_calls:
-                    fn_name = fc.name
-                    fn_args = dict(fc.args) if fc.args else {}
-                    result = await _execute_function(fn_name, fn_args)
-                    fc_parts.append(genai_types.Part.from_function_response(
-                        name=fn_name, response={"result": result},
-                    ))
-                    contents.append(genai_types.Content(
-                        role="model",
-                        parts=[genai_types.Part.from_function_call(name=fn_name, args=fn_args)],
-                    ))
-                contents.append(genai_types.Content(role="user", parts=fc_parts))
+                for _ in range(MAX_ROUNDS):
+                    response = await ai_providers.gemini_function_call(
+                        SUBAGENT_SYSTEM, contents, tools,
+                    )
+                    if response is None:
+                        final_text = "Gemini function-calling failed."
+                        break
+
+                    if not response.function_calls:
+                        final_text = response.text or "Done."
+                        break
+
+                    fc_parts = []
+                    for fc in response.function_calls:
+                        fn_name = fc.name
+                        fn_args = dict(fc.args) if fc.args else {}
+                        result = await _execute_function(fn_name, fn_args)
+                        fc_parts.append(genai_types.Part.from_function_response(
+                            name=fn_name, response={"result": result},
+                        ))
+                        contents.append(genai_types.Content(
+                            role="model",
+                            parts=[genai_types.Part.from_function_call(name=fn_name, args=fn_args)],
+                        ))
+                    contents.append(genai_types.Content(role="user", parts=fc_parts))
+                else:
+                    final_text = "Reached max function-call rounds. Actions may still have been executed."
+
             else:
-                final_text = "Reached max function-call rounds. Actions may still have been executed."
+                # ── OpenAI-compatible function-calling path (Groq/OpenRouter/Cerebras) ──
+                tools_json = _build_tools_json()
+                chat_messages: list[dict] = [{"role": "user", "content": prompt}]
+
+                for round_num in range(MAX_ROUNDS):
+                    result = await ai_providers.openai_function_call(
+                        SUBAGENT_SYSTEM, chat_messages, tools_json,
+                    )
+                    if result is None:
+                        final_text = "No AI provider available for function-calling."
+                        break
+
+                    tool_calls = result.get("tool_calls")
+                    if not tool_calls:
+                        final_text = result.get("content") or "Done."
+                        break
+
+                    # Execute each tool call
+                    for idx, tc in enumerate(tool_calls):
+                        call_id = f"call_{round_num}_{idx}"
+                        fn_name = tc["name"]
+                        fn_args = tc["arguments"]
+                        exec_result = await _execute_function(fn_name, fn_args)
+                        chat_messages.append({"role": "assistant", "content": None, "tool_calls": [{"id": call_id, "type": "function", "function": {"name": fn_name, "arguments": json.dumps(fn_args)}}]})
+                        chat_messages.append({"role": "tool", "tool_call_id": call_id, "content": exec_result})
+                else:
+                    final_text = "Reached max function-call rounds. Actions may still have been executed."
 
         except Exception as e:
             log.exception("Subagent error")
@@ -598,7 +719,7 @@ class Subagent(commands.Cog, name="Subagent"):
             return
 
         embed = discord.Embed(
-            title="🤖 Subagent",
+            title=f"🤖 {BOT_NAME} Subagent",
             color=COLOR_OK if edit_log else BOT_COLOR,
         )
         embed.add_field(name="Request", value=prompt[:1024], inline=False)
