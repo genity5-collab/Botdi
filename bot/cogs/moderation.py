@@ -169,7 +169,7 @@ class Moderation(commands.Cog, name="Moderation"):
                 color=COLOR_ERR,
                 timestamp=discord.utils.utcnow(),
             )
-            dm_embed.set_footer(text="Nexus Auto-Mod • Repeated violations lead to a strike")
+            dm_embed.set_footer(text="Vyrion Auto-Mod • Repeated violations lead to a strike")
             await member.send(embed=dm_embed)
         except discord.HTTPException:
             pass
