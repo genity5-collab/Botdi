@@ -1,19 +1,15 @@
-"""
-Shared utilities: action logging, appeal embeds, PII / TOS filter, profanity guard.
-"""
-
-from __future__ import annotations
-
 import re
-import discord
-from config import LOG_CHANNEL_ID, SUPPORT_LINK, BOT_COLOR
+import logging
+from typing import Any
 
+log = logging.getLogger("vyrion.utils")
 
-# ── PII patterns ──────────────────────────────────────────────────────────────
+# ── PII / sensitive-content detection ──────────────────────────────────────────
 
 _PII_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("email address",    re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")),
-    ("phone number",     re.compile(r"(\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}")),
+    # Phone: requires + or () or explicit separators to avoid matching Discord IDs / 10-digit numbers
+    ("phone number",     re.compile(r"(?:\+\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b|\+\d{10,15}")),
     ("SSN",              re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
     ("credit card",      re.compile(r"\b(?:\d[ \-]?){13,16}\b")),
     ("IP address",       re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")),
@@ -25,9 +21,20 @@ _TOS_KEYWORDS: list[str] = [
     "buy account", "sell account", "account trade", "doxx", "dox ",
     "swat", "raid server", "ddos", "botnet", "self harm", "kill yourself",
     "kys ", "csam", "cp link",
+    "loli", "shota", "underage nsfw", "minor nsfw",
+    "how to make bomb", "bomb instructions", "meth recipe", "drug recipe",
+    "stolen credit card", "carding", "fullz", "cvv dump",
+    "phishing kit", "malware download", "rat trojan", "keylogger download",
+    "whatsapp hack", "instagram hack", "account hack tool",
+    "nitro scam", "steam scam", "crypto scam",
+    "hitman", "assassination", "murder for hire",
+    "human trafficking", "organ harvesting",
+    "leaked nudes", "revenge porn", "deepfake nude",
+    "self-harm", "suicide method", "cutting yourself",
+    "school shooting", "mass shooting",
 ]
 
-# Words that trigger a strike when aimed at the bot
+# Words that trigger a warning when aimed at the bot (genuine profanity only)
 _PROFANITY: set[str] = {
     "fuck", "fucker", "fucking", "fuk", "f**k", "f*ck",
     "shit", "sh*t", "s**t",
@@ -36,89 +43,49 @@ _PROFANITY: set[str] = {
     "asshole", "ass hole",
     "dick", "d*ck",
     "motherfucker", "mofo",
-    "retard", "retarded",
     "faggot", "fag",
     "whore", "slut",
     "cock", "c*ck",
-    "piss off", "piss",
     "stfu", "shut the fuck up",
-    "stupid bot", "dumb bot", "idiot bot", "trash bot", "garbage bot",
 }
-
-# Words to scrub from AI output (replaced with ***)
-_OUTPUT_PROFANITY = re.compile(
-    r"\b(fuck(?:ing)?|shit|bitch|bastard|cunt|asshole|dick|motherfuck(?:er|ing)?|"
-    r"retard(?:ed)?|faggot|whore|slut|cock|piss)\b",
-    re.I,
-)
 
 
 def check_pii_tos(text: str) -> tuple[bool, str]:
-    """Returns (violated, reason). True if PII or TOS content detected."""
-    for label, pattern in _PII_PATTERNS:
-        if pattern.search(text):
-            return True, f"Contains {label}"
+    """Return (True, reason) if text contains PII or TOS-violating content."""
     lower = text.lower()
     for kw in _TOS_KEYWORDS:
         if kw in lower:
-            return True, f"Possible TOS violation: '{kw.strip()}'"
+            return True, f"TOS violation ({kw.strip()})"
+    for label, pat in _PII_PATTERNS:
+        if pat.search(text):
+            return True, f"contains {label}"
     return False, ""
 
 
 def check_profanity_at_bot(text: str) -> bool:
-    """True if the message contains profanity targeted at the bot."""
+    """Return True if text contains profanity aimed at the bot."""
     lower = text.lower()
     return any(word in lower for word in _PROFANITY)
 
 
-def clean_ai_output(text: str, max_len: int = 380) -> str:
-    """Strip profanity from AI output and enforce length cap."""
-    text = _OUTPUT_PROFANITY.sub("***", text)
-    if len(text) > max_len:
-        text = text[:max_len].rsplit(" ", 1)[0] + "…"
-    return text
+# ── Logging ────────────────────────────────────────────────────────────────────
 
-
-# ── Appeal embed ──────────────────────────────────────────────────────────────
-
-def build_appeal_embed(reason: str = "") -> discord.Embed:
-    embed = discord.Embed(
-        title="⚖️ Moderation Action",
-        description=(
-            f"**Reason:** {reason or 'Violation of server rules'}\n\n"
-            "You may appeal this action using the link below."
-        ),
-        color=BOT_COLOR,
-    )
-    embed.add_field(name="📋 Appeal", value=f"[Submit an appeal]({SUPPORT_LINK})", inline=False)
-    embed.set_footer(text="Appeals are reviewed within 48 hours.")
-    return embed
-
-
-# ── Action log ────────────────────────────────────────────────────────────────
-
-async def log_action(bot: discord.Client, title: str, description: str, color: int = 0xE74C3C) -> None:
-    """Send a log embed to LOG_CHANNEL_ID."""
-    channel = bot.get_channel(LOG_CHANNEL_ID)
+async def log_action(bot, title: str, description: str, color: int = 0x5865F2) -> None:
+    """Send an embed to the log channel."""
+    import discord
+    channel = bot.get_channel(LOG_CHANNEL_ID) if hasattr(bot, 'get_channel') else None
     if channel is None:
-        return
-    embed = discord.Embed(title=title, description=description, color=color)
-    try:
+        try:
+            channel = await bot.fetch_channel(LOG_CHANNEL_ID)
+        except Exception:
+            return
+    if channel:
+        embed = discord.Embed(title=title, description=description, color=color)
         await channel.send(embed=embed)
-    except discord.HTTPException:
-        pass
 
 
-# ── ID validation ─────────────────────────────────────────────────────────────
-
-def parse_user_id(argument: str) -> int | None:
-    """
-    Parse a Discord user ID from a mention (<@123>) or a raw integer string.
-    Returns the integer ID, or None if invalid.
-    """
-    mention_match = re.match(r"<@!?(\d{17,20})>", argument)
-    if mention_match:
-        return int(mention_match.group(1))
-    if re.match(r"^\d{17,20}$", argument):
-        return int(argument)
-    return None
+# Late import to avoid circular dependency
+try:
+    from config import LOG_CHANNEL_ID
+except ImportError:
+    LOG_CHANNEL_ID = 0
