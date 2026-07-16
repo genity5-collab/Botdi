@@ -1,6 +1,6 @@
 """
 Lightweight JSON-backed persistent store.
-Covers: strikes, tickets, conversation memory, DM daily quotas.
+Covers: strikes, tickets, conversation memory, DM daily quotas, taught facts.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import datetime
 import json
 import random
 import string
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +21,9 @@ STRIKES_FILE  = DATA_DIR / "strikes.json"
 TICKETS_FILE  = DATA_DIR / "tickets.json"
 MEMORIES_FILE = DATA_DIR / "memories.json"
 DM_QUOTA_FILE = DATA_DIR / "dm_quota.json"
+TAUGHT_FILE   = DATA_DIR / "taught.json"
 
 _lock = asyncio.Lock()
-
-# ── Internal helpers ──────────────────────────────────────────────────────────[...]
 
 def _load(path: Path) -> dict:
     if path.exists():
@@ -36,13 +36,13 @@ def _load(path: Path) -> dict:
 def _save(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
-# In-memory caches
 _strikes  : dict[str, int]            = _load(STRIKES_FILE)
 _tickets  : dict[str, dict[str, Any]] = _load(TICKETS_FILE)
 _memories : dict[str, list[dict]]     = _load(MEMORIES_FILE)
 _dm_quota : dict[str, dict]           = _load(DM_QUOTA_FILE)
+_taught   : dict[str, list[dict]]     = _load(TAUGHT_FILE)
 
-# ── Strikes ─────────────────────────────────────────────────────────────[...]
+# ── Strikes ─────────────────────────────────────────────────────────────
 
 async def get_strikes(user_id: int) -> int:
     async with _lock:
@@ -64,7 +64,7 @@ async def get_all_strikes() -> dict[str, int]:
     async with _lock:
         return dict(_strikes)
 
-# ── Tickets ─────────────────────────────────────────────────────────────[...]
+# ── Tickets ─────────────────────────────────────────────────────────────
 
 def _gen_ticket_id() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -100,91 +100,106 @@ async def get_user_open_ticket(user_id: int) -> str | None:
 
 # ── Conversation Memory ───────────────────────────────────────────────────────
 
-MAX_EXCHANGES = 50   # keep last 50 pairs = 100 messages per user
+MAX_EXCHANGES = 100
 
-def _summarize_old_exchanges(messages: list[dict], keep_recent: int = 15) -> list[dict]:
-    """
-    For very long conversations, summarize older exchanges to preserve context
-    while staying within token limits. Keeps the most recent messages intact.
-    """
+def _summarize_old_exchanges(messages: list[dict], keep_recent: int = 25) -> list[dict]:
     if len(messages) <= keep_recent * 2:
         return messages
-    
     recent = messages[-(keep_recent * 2):]
     old = messages[:-(keep_recent * 2)]
-    
-    # Create a concise summary of older messages
-    topics = []
+    topics: list[str] = []
     for msg in old:
-        content = msg.get("content", "")
+        content = (msg.get("content") or "").strip()
         if len(content) > 5:
-            # Extract first 80 chars as topic summary
-            topics.append(content[:80])
-    
-    if topics:
-        summary_text = " | ".join(topics[:10])  # Keep last 10 topic summaries
-        return [
-            {"role": "system", "content": f"[Earlier conversation: {summary_text}...]"},
-            *recent
-        ]
-    return recent
+            topics.append(content[:100])
+    if not topics:
+        return recent
+    summary_text = " | ".join(topics[-20:])
+    return [{"role": "system", "content": f"[Earlier conversation summary: {summary_text}]"}, *recent]
+
 
 def get_memory(user_id: int) -> list[dict]:
-    """Return stored message history for a user as OpenAI message dicts."""
-    messages = list(_memories.get(str(user_id), []))
-    # Apply memory summarization for very long conversations
-    return _summarize_old_exchanges(messages)
+    return _summarize_old_exchanges(list(_memories.get(str(user_id), [])))
+
 
 def add_memory(user_id: int, role: str, content: str) -> None:
-    """Append a message to history; trim to MAX_EXCHANGES * 2."""
-    key  = str(user_id)
+    key = str(user_id)
     hist = _memories.get(key, [])
-    hist.append({"role": role, "content": content[:800]})
+    hist.append({"role": role, "content": content[:1500]})
     if len(hist) > MAX_EXCHANGES * 2:
         hist = hist[-(MAX_EXCHANGES * 2):]
     _memories[key] = hist
 
+
 async def save_memory() -> None:
     async with _lock:
         _save(MEMORIES_FILE, _memories)
+
 
 async def clear_memory(user_id: int) -> None:
     async with _lock:
         _memories.pop(str(user_id), None)
         _save(MEMORIES_FILE, _memories)
 
-# ── DM Daily Quota ─────────────────────────────────────────────────────────[...]
+# ── DM Daily Quota ─────────────────────────────────────────────────────────
 
-DM_DAILY_LIMIT = 15   # synced with config.DM_DAILY_LIMIT
+DM_DAILY_LIMIT = 15
 
 def check_dm_quota(user_id: int) -> tuple[bool, int]:
-    """
-    Returns (allowed, remaining).
-    allowed=True if user still has messages left today.
-    """
     today = datetime.date.today().isoformat()
-    key   = str(user_id)
+    key = str(user_id)
     entry = _dm_quota.get(key, {})
     if entry.get("date") != today:
-        return True, DM_DAILY_LIMIT          # fresh day
-    used      = entry.get("count", 0)
+        return True, DM_DAILY_LIMIT
+    used = entry.get("count", 0)
     remaining = DM_DAILY_LIMIT - used
     return remaining > 0, max(0, remaining)
 
+
 def use_dm_quota(user_id: int) -> int:
-    """Consume one DM message and persist. Returns remaining count for today."""
     today = datetime.date.today().isoformat()
-    key   = str(user_id)
+    key = str(user_id)
     entry = _dm_quota.get(key, {})
     if entry.get("date") != today:
         _dm_quota[key] = {"date": today, "count": 1}
     else:
         _dm_quota[key]["count"] = entry.get("count", 0) + 1
     _save(DM_QUOTA_FILE, _dm_quota)
-    used      = _dm_quota[key]["count"]
-    remaining = DM_DAILY_LIMIT - used
-    return max(0, remaining)
+    return max(0, DM_DAILY_LIMIT - _dm_quota[key]["count"])
+
 
 def get_dm_quota_remaining(user_id: int) -> int:
     _, remaining = check_dm_quota(user_id)
     return remaining
+
+# ── Taught server facts (from /teach) ────────────────────────────────────────
+
+MAX_TAUGHT_PER_GUILD = 100
+
+def get_taught(guild_id: int) -> str:
+    facts = _taught.get(str(guild_id), [])
+    if not facts:
+        return ""
+    lines = []
+    for i, f in enumerate(facts[-MAX_TAUGHT_PER_GUILD:], start=1):
+        lines.append(f"{i}. {f.get('fact', '')}")
+    return "\n".join(lines)
+
+
+async def add_taught(guild_id: int, fact: str, taught_by: int) -> None:
+    if not fact:
+        return
+    async with _lock:
+        key = str(guild_id)
+        arr = _taught.get(key, [])
+        arr.append({"fact": fact[:800], "by": taught_by, "ts": int(time.time())})
+        if len(arr) > MAX_TAUGHT_PER_GUILD:
+            arr = arr[-MAX_TAUGHT_PER_GUILD:]
+        _taught[key] = arr
+        _save(TAUGHT_FILE, _taught)
+
+
+async def clear_taught(guild_id: int) -> None:
+    async with _lock:
+        _taught.pop(str(guild_id), None)
+        _save(TAUGHT_FILE, _taught)
