@@ -104,17 +104,17 @@ class General(commands.Cog, name="General"):
     @app_commands.command(name="help", description="Show all available commands.")
     async def help_cmd(self, interaction: discord.Interaction) -> None:
         embed = discord.Embed(
-            title="📖 Nexus — Command Reference",
+            title="📖 Vyrion — Command Reference",
             description="All available slash commands",
             color=BOT_COLOR,
         )
         embed.add_field(name="🤖 AI", value=(
-            "`/ask <question>` — Ask Nexus anything\n"
+            "`/ask <question>` — Ask Vyrion anything\n"
             "`/forget` — Clear your chat history\n"
-            "`/teach <fact>` — Admin: teach Nexus about this server\n"
+            "`/teach <fact>` — Admin: teach Vyrion about this server\n"
             "`/untutor` — Admin: clear taught facts\n"
             "`/roblox <kind> [query]` — Live Roblox lookup (game/user/trending)\n"
-            "*Or @mention me, say `nexus …`, or DM me — I understand images too.*"
+            "*Or @mention me, say `vyrion …`, or DM me — I understand images too.*"
         ), inline=False)
         embed.add_field(name="🤖 Subagent", value=(
             "`/subagent <prompt>` — Bot owner only: AI performs Discord actions from text\n"
@@ -134,7 +134,7 @@ class General(commands.Cog, name="General"):
         embed.add_field(name="ℹ️ General", value=(
             "`/ping` `/uptime` `/userinfo` `/serverinfo` `/help`"
         ), inline=False)
-        embed.set_footer(text="Nexus — type / in Discord to see all commands")
+        embed.set_footer(text="Vyrion — type / in Discord to see all commands")
         await interaction.response.send_message(embed=embed)
 
 

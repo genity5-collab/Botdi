@@ -1,5 +1,5 @@
 """
-Nexus — configuration.
+Vyrion — configuration.
 """
 import os
 
@@ -22,7 +22,7 @@ ADMIN_CHANNEL_ID : int = _parse_channel_id(os.environ["ADMIN_CHANNEL_ID"])
 LOG_CHANNEL_ID   : int = _parse_channel_id(os.environ["LOG_CHANNEL_ID"])
 SUPPORT_LINK     : str = os.environ["SUPPORT_LINK"]
 
-BOT_NAME   = "Nexus"
+BOT_NAME   = "Vyrion"
 BOT_PREFIX = "/"
 BOT_COLOR  = 0x5865F2
 COLOR_OK   = 0x23A55A
