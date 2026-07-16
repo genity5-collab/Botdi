@@ -4,10 +4,14 @@ Nexus — configuration.
 import os
 
 DISCORD_TOKEN      : str = os.environ["DISCORD_TOKEN"]
-GEMINI_API_KEY     : str = os.environ["GEMINI_API_KEY"]
+GEMINI_API_KEY     : str = os.environ.get("GEMINI_API_KEY", "")
 GROQ_API_KEY       : str = os.environ.get("GROQ_API_KEY", "")
 CEREBRAS_API_KEY   : str = os.environ.get("CEREBRAS_API_KEY", "")
 OPENROUTER_API_KEY : str = os.environ.get("OPENROUTER_API_KEY", "")
+HUGGINGFACE_API_KEY: str = os.environ.get("HUGGINGFACE_API_KEY", "")
+
+# Discord bot owner — /subagent restricted to this user
+BOT_OWNER_ID: int = int(os.environ.get("BOT_OWNER_ID", "0"))
 
 def _parse_channel_id(value: str) -> int:
     if value.startswith("http"):

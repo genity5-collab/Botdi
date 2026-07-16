@@ -7,6 +7,7 @@ Nexus AI Cog
 - Per-guild taught knowledge via /teach (admin-only)
 - Live Roblox knowledge via games.roblox.com / users.roblox.com
 - Understands attached images and GIFs (Gemini vision)
+- Multi-provider fallback: Gemini → Groq → OpenRouter → HuggingFace → Cerebras
 """
 from __future__ import annotations
 
@@ -20,9 +21,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from config import (
-    GEMINI_API_KEY,
-    GEMINI_MODEL,
-    GEMINI_FALLBACK_MODELS,
     DM_DAILY_LIMIT,
 )
 from data_store import (
@@ -38,17 +36,9 @@ from data_store import (
 )
 from utils import check_profanity_at_bot, check_pii_tos
 import roblox as roblox_api
+import ai_providers
 
 log = logging.getLogger("nexus.ai")
-
-try:
-    from google import genai
-    from google.genai import types as genai_types
-    _client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-except Exception as e:  # pragma: no cover
-    log.warning("google-genai unavailable: %s", e)
-    _client = None
-    genai_types = None
 
 BOT_NAME = "Nexus"
 NAME_TRIGGER = re.compile(r"^\s*nexus[\s,:!?]+", re.I)
@@ -131,44 +121,21 @@ async def _generate(
     server_facts: str,
     image_parts: list[tuple[bytes, str]] | None = None,
 ) -> str:
-    if _client is None or genai_types is None:
-        return "AI is not configured (missing GEMINI_API_KEY)."
-
     sys_prompt = SYSTEM_PROMPT
     if server_facts:
         sys_prompt += f"\n\n[Server knowledge]\n{server_facts}"
     sys_prompt += _ROBLOX_TOOL_HINT
 
-    contents: list = []
+    messages: list[dict] = []
     for m in history[-30:]:
-        role = "user" if m["role"] == "user" else "model"
-        contents.append(genai_types.Content(role=role, parts=[genai_types.Part.from_text(text=m["content"])]))
+        messages.append({"role": m["role"] if m["role"] in ("user", "assistant") else "user", "content": m["content"]})
+    messages.append({"role": "user", "content": user_text})
 
-    user_parts = [genai_types.Part.from_text(text=user_text)]
-    for data, mime in (image_parts or []):
-        user_parts.append(genai_types.Part.from_bytes(data=data, mime_type=mime))
-    contents.append(genai_types.Content(role="user", parts=user_parts))
-
-    models_to_try = [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]
-    reply_text = ""
-    for model_id in models_to_try:
-        try:
-            resp = await asyncio.to_thread(
-                _client.models.generate_content,
-                model=model_id,
-                contents=contents,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=sys_prompt,
-                    temperature=0.8,
-                    max_output_tokens=1200,
-                ),
-            )
-            reply_text = (resp.text or "").strip()
-            if reply_text:
-                break
-        except Exception as e:
-            log.warning("Model %s failed: %s", model_id, e)
-            continue
+    reply_text = await ai_providers.generate(
+        sys_prompt, messages,
+        temperature=0.8, max_tokens=1200,
+        image_parts=image_parts,
+    )
 
     if not reply_text:
         return "I hit a snag reaching the AI. Try again in a moment."
@@ -179,28 +146,16 @@ async def _generate(
             call = json.loads(stripped)
             if call.get("tool") == "roblox":
                 tool_out = await _roblox_tool(call.get("action", ""), call.get("query", ""))
-                follow_contents = contents + [
-                    genai_types.Content(role="model", parts=[genai_types.Part.from_text(text=stripped)]),
-                    genai_types.Content(role="user", parts=[genai_types.Part.from_text(
-                        text=f"[roblox tool result]\n{tool_out}\n\nAnswer the user using this data. Do not emit JSON."
-                    )]),
+                follow_messages = messages + [
+                    {"role": "assistant", "content": stripped},
+                    {"role": "user", "content": f"[roblox tool result]\n{tool_out}\n\nAnswer the user using this data. Do not emit JSON."},
                 ]
-                try:
-                    resp2 = await asyncio.to_thread(
-                        _client.models.generate_content,
-                        model=models_to_try[0],
-                        contents=follow_contents,
-                        config=genai_types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            temperature=0.7,
-                            max_output_tokens=1200,
-                        ),
-                    )
-                    final = (resp2.text or "").strip()
-                    if final:
-                        return final
-                except Exception as e:
-                    log.warning("Roblox follow-up failed: %s", e)
+                final = await ai_providers.generate(
+                    SYSTEM_PROMPT, follow_messages,
+                    temperature=0.7, max_tokens=1200,
+                )
+                if final:
+                    return final
                 return tool_out
         except json.JSONDecodeError:
             pass
