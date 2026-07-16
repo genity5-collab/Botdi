@@ -117,8 +117,9 @@ class General(commands.Cog, name="General"):
             "*Or @mention me, say `nexus …`, or DM me — I understand images too.*"
         ), inline=False)
         embed.add_field(name="🤖 Subagent", value=(
-            "`/subagent <prompt>` — Admin: AI performs Discord actions from text\n"
-            "Creates channels, roles, sends messages, and more. Includes live edit log."
+            "`/subagent <prompt>` — Bot owner only: AI performs Discord actions from text\n"
+            "Creates channels, roles, events, embeds, sends messages, and more. Includes live edit log.\n"
+            "`/changelog` — View the live subagent action changelog"
         ), inline=False)
         embed.add_field(name="⚠️ Moderation", value=(
             "`/strike` `/strikes` `/mute` `/unmute` `/warn` "

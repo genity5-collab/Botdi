@@ -21,8 +21,19 @@ and live Roblox knowledge — powered by Gemini (vision-capable).
 
 ## Required env
 
-- `DISCORD_TOKEN`, `GEMINI_API_KEY`, `ADMIN_CHANNEL_ID`, `LOG_CHANNEL_ID`, `SUPPORT_LINK`
-- Optional: `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`, `DATABASE_URL`
+- `DISCORD_TOKEN`, `ADMIN_CHANNEL_ID`, `LOG_CHANNEL_ID`, `SUPPORT_LINK`
+- Optional: `GEMINI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`, `HUGGINGFACE_API_KEY`, `BOT_OWNER_ID`, `DATABASE_URL`
+
+## AI Fallback Chain
+
+If the primary AI provider fails, the bot tries the next configured one:
+1. **Gemini** (google-genai, vision-capable) — also powers /subagent function calling
+2. **Groq** (OpenAI-compatible REST)
+3. **OpenRouter** (free models, OpenAI-compatible REST)
+4. **Hugging Face** (Inference API REST)
+5. **Cerebras** (OpenAI-compatible REST)
+
+Only providers with API keys configured are tried. At least one key is required for AI features.
 
 ## Stack
 
