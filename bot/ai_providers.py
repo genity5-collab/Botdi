@@ -3,12 +3,13 @@ Multi-provider AI fallback layer.
 
 Tries providers in order until one succeeds:
   1. Gemini (google-genai, vision-capable)
-  2. Groq (OpenAI-compatible REST)
-  3. OpenRouter (OpenAI-compatible REST, free models)
-  4. Hugging Face (Inference API REST)
-  5. Cerebras (OpenAI-compatible REST)
+  2. Groq (OpenAI-compatible REST, 12 models)
+  3. OpenRouter (OpenAI-compatible REST, 24 free models)
+  4. Hugging Face (Inference API REST, 10 models)
+  5. Cerebras (OpenAI-compatible REST, 2 models)
 
 Each provider is optional — only configured keys are tried.
+Total: 30+ fallback models across all providers.
 """
 from __future__ import annotations
 
@@ -20,18 +21,16 @@ from typing import Any
 
 import aiohttp
 
+import config
 from config import (
     GEMINI_API_KEY,
     GEMINI_MODEL,
     GEMINI_FALLBACK_MODELS,
     GROQ_API_KEY,
-    GROQ_MODEL,
     GROQ_URL,
     CEREBRAS_API_KEY,
-    CEREBRAS_MODEL,
     CEREBRAS_URL,
     OPENROUTER_API_KEY,
-    OPENROUTER_MODEL,
     OPENROUTER_URL,
     HUGGINGFACE_API_KEY,
 )
@@ -90,29 +89,27 @@ async def _openai_compat_chat(
                 timeout=aiohttp.ClientTimeout(total=timeout),
             ) as resp:
                 if resp.status != 200:
-                    body = await resp.text()
-                    log.warning("%s returned %d: %s", url, resp.status, body[:300])
                     return ""
                 data = await resp.json()
                 return (data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
-    except Exception as e:
-        log.warning("%s request failed: %s", url, e)
+    except Exception:
         return ""
 
 
 # ── Hugging Face Inference API ─────────────────────────────────────────────────
 
 HF_URL = "https://api-inference.huggingface.co/models/{model}"
-HF_MODEL = "meta-llama/Llama-3.2-3B-Instruct"
 
 async def _huggingface_chat(
     messages: list[dict],
     *,
+    model: str = "",
     temperature: float = 0.8,
     max_tokens: int = 200,
 ) -> str:
     if not HUGGINGFACE_API_KEY:
         return ""
+    hf_model = model or getattr(config, "ACTIVE_HF_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
     system_parts = [m["content"] for m in messages if m["role"] == "system"]
     convo_parts = []
     for m in messages:
@@ -142,20 +139,17 @@ async def _huggingface_chat(
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                HF_URL.format(model=HF_MODEL),
+                HF_URL.format(model=hf_model),
                 headers=headers, json=payload,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status != 200:
-                    body = await resp.text()
-                    log.warning("HuggingFace returned %d: %s", resp.status, body[:300])
                     return ""
                 data = await resp.json()
                 if isinstance(data, list) and data:
                     return (data[0].get("generated_text", "") or "").strip()
                 return ""
-    except Exception as e:
-        log.warning("HuggingFace request failed: %s", e)
+    except Exception:
         return ""
 
 
@@ -173,6 +167,7 @@ async def _gemini_generate(
     if client is None or gt is None:
         return ""
 
+    active_model = getattr(config, "ACTIVE_GEMINI_MODEL", GEMINI_MODEL)
     contents: list = []
     for m in messages[-30:]:
         role = "user" if m["role"] == "user" else "model"
@@ -186,7 +181,7 @@ async def _gemini_generate(
     else:
         contents.append(gt.Content(role="user", parts=user_parts))
 
-    models_to_try = [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]
+    models_to_try = [active_model, *GEMINI_FALLBACK_MODELS]
     for model_id in models_to_try:
         try:
             resp = await asyncio.to_thread(
@@ -202,8 +197,7 @@ async def _gemini_generate(
             text = (resp.text or "").strip()
             if text:
                 return text
-        except Exception as e:
-            log.warning("Gemini model %s failed: %s", model_id, e)
+        except Exception:
             continue
     return ""
 
@@ -221,7 +215,9 @@ async def generate(
     """
     Generate a text reply using the first provider that succeeds.
     Providers are tried in order: Gemini → Groq → OpenRouter → HuggingFace → Cerebras.
+    Each provider tries all its configured models before moving to the next.
     """
+    # 1. Gemini (with fallback models)
     if GEMINI_API_KEY:
         text = await _gemini_generate(
             system_prompt, messages,
@@ -233,36 +229,53 @@ async def generate(
 
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
 
+    # 2. Groq (try all configured models)
     if GROQ_API_KEY:
-        text = await _openai_compat_chat(
-            GROQ_URL, GROQ_API_KEY, GROQ_MODEL, rest_messages,
-            temperature=temperature, max_tokens=max_tokens,
-        )
-        if text:
-            return text
+        active_groq = getattr(config, "ACTIVE_GROQ_MODEL", config.GROQ_MODELS[0])
+        groq_models = [active_groq] + [m for m in config.GROQ_MODELS if m != active_groq]
+        for model in groq_models:
+            text = await _openai_compat_chat(
+                GROQ_URL, GROQ_API_KEY, model, rest_messages,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            if text:
+                return text
 
+    # 3. OpenRouter (try all free models)
     if OPENROUTER_API_KEY:
-        text = await _openai_compat_chat(
-            OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL, rest_messages,
-            temperature=temperature, max_tokens=max_tokens,
-        )
-        if text:
-            return text
+        active_or = getattr(config, "ACTIVE_OPENROUTER_MODEL", config.OPENROUTER_MODELS[0])
+        or_models = [active_or] + [m for m in config.OPENROUTER_MODELS if m != active_or]
+        for model in or_models:
+            text = await _openai_compat_chat(
+                OPENROUTER_URL, OPENROUTER_API_KEY, model, rest_messages,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            if text:
+                return text
 
+    # 4. HuggingFace (try all models)
     if HUGGINGFACE_API_KEY:
-        text = await _huggingface_chat(
-            rest_messages, temperature=temperature, max_tokens=max_tokens,
-        )
-        if text:
-            return text
+        active_hf = getattr(config, "ACTIVE_HF_MODEL", config.HUGGINGFACE_MODELS[0])
+        hf_models = [active_hf] + [m for m in config.HUGGINGFACE_MODELS if m != active_hf]
+        for model in hf_models:
+            text = await _huggingface_chat(
+                rest_messages, model=model,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            if text:
+                return text
 
+    # 5. Cerebras (try all models)
     if CEREBRAS_API_KEY:
-        text = await _openai_compat_chat(
-            CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL, rest_messages,
-            temperature=temperature, max_tokens=max_tokens,
-        )
-        if text:
-            return text
+        active_cb = getattr(config, "ACTIVE_CEREBRAS_MODEL", config.CEREBRAS_MODELS[0])
+        cb_models = [active_cb] + [m for m in config.CEREBRAS_MODELS if m != active_cb]
+        for model in cb_models:
+            text = await _openai_compat_chat(
+                CEREBRAS_URL, CEREBRAS_API_KEY, model, rest_messages,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            if text:
+                return text
 
     return "I'm having trouble responding right now. Try again in a moment."
 
@@ -278,15 +291,16 @@ async def gemini_function_call(
     client, gt = _get_gemini()
     if client is None or gt is None:
         return None
-    config = gt.GenerateContentConfig(
+    active_model = getattr(config, "ACTIVE_GEMINI_MODEL", GEMINI_MODEL)
+    config_obj = gt.GenerateContentConfig(
         system_instruction=system_prompt,
         tools=tools,
     )
     return await asyncio.to_thread(
         client.models.generate_content,
-        model=GEMINI_MODEL,
+        model=active_model,
         contents=contents,
-        config=config,
+        config=config_obj,
     )
 
 
@@ -320,11 +334,15 @@ async def openai_function_call(
 
     providers = []
     if GROQ_API_KEY:
-        providers.append((GROQ_URL, GROQ_API_KEY, GROQ_MODEL))
+        active_groq = getattr(config, "ACTIVE_GROQ_MODEL", config.GROQ_MODELS[0])
+        for m in config.GROQ_MODELS:
+            providers.append((GROQ_URL, GROQ_API_KEY, m))
     if OPENROUTER_API_KEY:
-        providers.append((OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL))
+        for m in config.OPENROUTER_MODELS:
+            providers.append((OPENROUTER_URL, OPENROUTER_API_KEY, m))
     if CEREBRAS_API_KEY:
-        providers.append((CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL))
+        for m in config.CEREBRAS_MODELS:
+            providers.append((CEREBRAS_URL, CEREBRAS_API_KEY, m))
 
     for url, key, model in providers:
         headers = {
@@ -346,8 +364,6 @@ async def openai_function_call(
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status != 200:
-                        body = await resp.text()
-                        log.warning("function-call %s returned %d: %s", url, resp.status, body[:300])
                         continue
                     data = await resp.json()
                     choice = data.get("choices", [{}])[0]
@@ -369,8 +385,7 @@ async def openai_function_call(
                         return {"tool_calls": parsed_calls, "content": ""}
 
                     return {"tool_calls": None, "content": content.strip()}
-        except Exception as e:
-            log.warning("function-call %s failed: %s", url, e)
+        except Exception:
             continue
 
     return None
@@ -409,25 +424,39 @@ async def text_function_call(
     rest_messages = [{"role": "system", "content": injected_system}] + messages
 
     text = ""
+    # Try all providers with text-based calling
     if GROQ_API_KEY:
-        text = await _openai_compat_chat(
-            GROQ_URL, GROQ_API_KEY, GROQ_MODEL, rest_messages,
-            temperature=temperature, max_tokens=max_tokens,
-        )
+        for model in config.GROQ_MODELS:
+            text = await _openai_compat_chat(
+                GROQ_URL, GROQ_API_KEY, model, rest_messages,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            if text:
+                break
     if not text and OPENROUTER_API_KEY:
-        text = await _openai_compat_chat(
-            OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL, rest_messages,
-            temperature=temperature, max_tokens=max_tokens,
-        )
-    if not text and CEREBRAS_API_KEY:
-        text = await _openai_compat_chat(
-            CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL, rest_messages,
-            temperature=temperature, max_tokens=max_tokens,
-        )
+        for model in config.OPENROUTER_MODELS:
+            text = await _openai_compat_chat(
+                OPENROUTER_URL, OPENROUTER_API_KEY, model, rest_messages,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            if text:
+                break
     if not text and HUGGINGFACE_API_KEY:
-        text = await _huggingface_chat(
-            rest_messages, temperature=temperature, max_tokens=max_tokens,
-        )
+        for model in config.HUGGINGFACE_MODELS:
+            text = await _huggingface_chat(
+                rest_messages, model=model,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            if text:
+                break
+    if not text and CEREBRAS_API_KEY:
+        for model in config.CEREBRAS_MODELS:
+            text = await _openai_compat_chat(
+                CEREBRAS_URL, CEREBRAS_API_KEY, model, rest_messages,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            if text:
+                break
 
     if not text:
         return None

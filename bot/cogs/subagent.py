@@ -1,15 +1,16 @@
 """
 Subagent Cog — bot-owner-only /subagent slash command.
 
-Uses Gemini function calling (with multi-provider fallback for text)
-to let the bot owner describe Discord actions in natural language.
+Uses multi-provider AI (Gemini function-calling with fallback to
+Groq/OpenRouter/HuggingFace/Cerebras text-based calling) to let the
+bot owner describe Discord actions in natural language.
+
 The AI decides which functions to call — create channels, roles, events,
 embeds, send messages, and more — the bot executes them, and a live
 edit log is sent to LOG_CHANNEL_ID after each action.
 
-Example: /subagent Create a channel called "announcements" and send "Hello!" in it
-         /subagent Create a scheduled event "Game Night" for tomorrow at 8pm
-         /subagent Send a red embed titled "Warning" saying "Server maintenance soon" in #general
+API errors are never shown to the user — if all providers fail, a generic
+message is returned instead.
 """
 
 from __future__ import annotations
@@ -18,13 +19,14 @@ import asyncio
 import datetime
 import json
 import logging
+import re
 from pathlib import Path
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import GEMINI_MODEL, LOG_CHANNEL_ID, BOT_COLOR, COLOR_OK, COLOR_ERR, BOT_OWNER_ID, BOT_NAME
+from config import LOG_CHANNEL_ID, BOT_COLOR, COLOR_OK, COLOR_ERR, BOT_OWNER_ID, BOT_NAME
 from utils import log_action
 import ai_providers
 
@@ -45,7 +47,9 @@ SUBAGENT_SYSTEM = (
     "Do not ask for confirmation. Do not explain what you're about to do. Just call the functions. "
     "If a request involves multiple steps, call all the functions in sequence. "
     "If a parameter is ambiguous, make a reasonable choice and proceed — never refuse. "
-    "After all functions are called, give a brief 1-2 sentence summary of what was done."
+    "After all functions are called, give a brief 1-2 sentence summary of what was done. "
+    "NEVER mention API errors, provider names, model names, or internal system details. "
+    "If something goes wrong internally, just say 'I had trouble with that action.' "
 )
 
 MAX_ROUNDS = 8
@@ -361,10 +365,7 @@ class Subagent(commands.Cog, name="Subagent"):
             return
 
         if not ai_providers.is_any_provider_available():
-            await interaction.followup.send(
-                "No AI provider is configured. Set at least one of: "
-                "GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, CEREBRAS_API_KEY, HUGGINGFACE_API_KEY"
-            )
+            await interaction.followup.send("I'm not configured yet. Please try again later.")
             return
 
         guild = interaction.guild
@@ -661,7 +662,8 @@ class Subagent(commands.Cog, name="Subagent"):
                         SUBAGENT_SYSTEM, contents, tools,
                     )
                     if response is None:
-                        final_text = "Gemini function-calling failed."
+                        # Fall back to OpenAI-compatible path
+                        use_gemini = False
                         break
 
                     if not response.function_calls:
@@ -684,7 +686,7 @@ class Subagent(commands.Cog, name="Subagent"):
                 else:
                     final_text = "Reached max function-call rounds. Actions may still have been executed."
 
-            else:
+            if not use_gemini:
                 # ── OpenAI-compatible function-calling path (Groq/OpenRouter/Cerebras) ──
                 tools_json = _build_tools_json()
                 chat_messages: list[dict] = [{"role": "user", "content": prompt}]
@@ -699,7 +701,7 @@ class Subagent(commands.Cog, name="Subagent"):
                             SUBAGENT_SYSTEM, chat_messages, tools_json,
                         )
                         if result is None:
-                            final_text = "No AI provider available for function-calling."
+                            final_text = "I had trouble processing that request. Please try again."
                             break
 
                     tool_calls = result.get("tool_calls")
@@ -718,10 +720,13 @@ class Subagent(commands.Cog, name="Subagent"):
                 else:
                     final_text = "Reached max function-call rounds. Actions may still have been executed."
 
-        except Exception as e:
+        except Exception:
             log.exception("Subagent error")
-            await interaction.followup.send(f"Error: {e}", ephemeral=True)
-            return
+            final_text = "I had trouble with that request. Please try again."
+
+        # Sanitize final_text to remove any API error messages
+        from utils import sanitize_ai_output
+        final_text = sanitize_ai_output(final_text, user_message=prompt)
 
         embed = discord.Embed(
             title=f"🤖 {BOT_NAME} Subagent",
