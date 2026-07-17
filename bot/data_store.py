@@ -1,6 +1,6 @@
 """
 Lightweight JSON-backed persistent store.
-Covers: strikes, tickets, conversation memory, DM daily quotas, taught facts.
+Covers: strikes, tickets, conversation memory, DM daily quotas, taught facts, enforced rules.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ TICKETS_FILE  = DATA_DIR / "tickets.json"
 MEMORIES_FILE = DATA_DIR / "memories.json"
 DM_QUOTA_FILE = DATA_DIR / "dm_quota.json"
 TAUGHT_FILE   = DATA_DIR / "taught.json"
+RULES_FILE    = DATA_DIR / "rules.json"
 
 _lock = asyncio.Lock()
 
@@ -41,6 +42,7 @@ _tickets  : dict[str, dict[str, Any]] = _load(TICKETS_FILE)
 _memories : dict[str, list[dict]]     = _load(MEMORIES_FILE)
 _dm_quota : dict[str, dict]           = _load(DM_QUOTA_FILE)
 _taught   : dict[str, list[dict]]     = _load(TAUGHT_FILE)
+_rules    : dict[str, list[dict]]     = _load(RULES_FILE)
 
 # ── Strikes ─────────────────────────────────────────────────────────────
 
@@ -203,3 +205,52 @@ async def clear_taught(guild_id: int) -> None:
     async with _lock:
         _taught.pop(str(guild_id), None)
         _save(TAUGHT_FILE, _taught)
+
+# ── Enforced rules (from /rule) ────────────────────────────────────────────────
+
+MAX_RULES = 20
+
+def get_rules(guild_id: int) -> list[dict]:
+    return list(_rules.get(str(guild_id), []))
+
+
+def get_rules_text(guild_id: int) -> str:
+    rules = get_rules(guild_id)
+    if not rules:
+        return ""
+    lines = []
+    for i, r in enumerate(rules, start=1):
+        lines.append(f"{i}. {r.get('rule', '')}")
+    return "\n".join(lines)
+
+
+async def add_rule(guild_id: int, rule: str, set_by: int) -> int:
+    if not rule.strip():
+        return 0
+    async with _lock:
+        key = str(guild_id)
+        arr = _rules.get(key, [])
+        arr.append({"rule": rule[:500], "by": set_by, "ts": int(time.time())})
+        if len(arr) > MAX_RULES:
+            arr = arr[-MAX_RULES:]
+        _rules[key] = arr
+        _save(RULES_FILE, _rules)
+        return len(arr)
+
+
+async def remove_rule(guild_id: int, index: int) -> bool:
+    async with _lock:
+        key = str(guild_id)
+        arr = _rules.get(key, [])
+        if index < 0 or index >= len(arr):
+            return False
+        arr.pop(index)
+        _rules[key] = arr
+        _save(RULES_FILE, _rules)
+        return True
+
+
+async def clear_rules(guild_id: int) -> None:
+    async with _lock:
+        _rules.pop(str(guild_id), None)
+        _save(RULES_FILE, _rules)
