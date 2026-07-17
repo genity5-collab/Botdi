@@ -1,6 +1,6 @@
 """
 Lightweight JSON-backed persistent store.
-Covers: strikes, tickets, conversation memory, DM daily quotas, taught facts, enforced rules.
+Covers: strikes, tickets, conversation memory, rate limiting, taught facts, enforced rules.
 """
 
 from __future__ import annotations
@@ -17,12 +17,12 @@ from typing import Any
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-STRIKES_FILE  = DATA_DIR / "strikes.json"
-TICKETS_FILE  = DATA_DIR / "tickets.json"
-MEMORIES_FILE = DATA_DIR / "memories.json"
-DM_QUOTA_FILE = DATA_DIR / "dm_quota.json"
-TAUGHT_FILE   = DATA_DIR / "taught.json"
-RULES_FILE    = DATA_DIR / "rules.json"
+STRIKES_FILE    = DATA_DIR / "strikes.json"
+TICKETS_FILE    = DATA_DIR / "tickets.json"
+MEMORIES_FILE   = DATA_DIR / "memories.json"
+RATE_LIMIT_FILE = DATA_DIR / "rate_limits.json"
+TAUGHT_FILE     = DATA_DIR / "taught.json"
+RULES_FILE      = DATA_DIR / "rules.json"
 
 _lock = asyncio.Lock()
 
@@ -37,12 +37,12 @@ def _load(path: Path) -> dict:
 def _save(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
-_strikes  : dict[str, int]            = _load(STRIKES_FILE)
-_tickets  : dict[str, dict[str, Any]] = _load(TICKETS_FILE)
-_memories : dict[str, list[dict]]     = _load(MEMORIES_FILE)
-_dm_quota : dict[str, dict]           = _load(DM_QUOTA_FILE)
-_taught   : dict[str, list[dict]]     = _load(TAUGHT_FILE)
-_rules    : dict[str, list[dict]]     = _load(RULES_FILE)
+_strikes     : dict[str, int]            = _load(STRIKES_FILE)
+_tickets     : dict[str, dict[str, Any]] = _load(TICKETS_FILE)
+_memories    : dict[str, list[dict]]     = _load(MEMORIES_FILE)
+_rate_limits : dict[str, dict]           = _load(RATE_LIMIT_FILE)
+_taught      : dict[str, list[dict]]     = _load(TAUGHT_FILE)
+_rules       : dict[str, list[dict]]     = _load(RULES_FILE)
 
 # ── Strikes ─────────────────────────────────────────────────────────────
 
@@ -143,36 +143,79 @@ async def clear_memory(user_id: int) -> None:
         _memories.pop(str(user_id), None)
         _save(MEMORIES_FILE, _memories)
 
-# ── DM Daily Quota ─────────────────────────────────────────────────────────
+# ── Rate limiting ────────────────────────────────────────────────────────────
+# Server: 5 msgs per hour (owner = infinite)
+# DM: 15 msgs per 3-day cycle, degrading: day1=15, day2=10, day3=5, then 0 until cycle resets
 
-DM_DAILY_LIMIT = 15
+def _now_ts() -> int:
+    return int(time.time())
 
-def check_dm_quota(user_id: int) -> tuple[bool, int]:
-    today = datetime.date.today().isoformat()
+
+def check_server_rate_limit(user_id: int, *, limit: int = 5, window: int = 3600, owner_id: int = 0) -> tuple[bool, int, int]:
+    """Returns (allowed, remaining, retry_after_seconds)."""
+    if owner_id and user_id == owner_id:
+        return True, -1, 0  # infinite for owner
     key = str(user_id)
-    entry = _dm_quota.get(key, {})
-    if entry.get("date") != today:
-        return True, DM_DAILY_LIMIT
-    used = entry.get("count", 0)
-    remaining = DM_DAILY_LIMIT - used
-    return remaining > 0, max(0, remaining)
+    now = _now_ts()
+    entry = _rate_limits.get(key, {})
+    server = entry.get("server", {})
+    timestamps: list = server.get("timestamps", [])
+    cutoff = now - window
+    timestamps = [t for t in timestamps if t > cutoff]
+    if len(timestamps) >= limit:
+        retry_after = timestamps[0] + window - now
+        _rate_limits[key] = {**entry, "server": {"timestamps": timestamps}}
+        _save(RATE_LIMIT_FILE, _rate_limits)
+        return False, 0, max(retry_after, 1)
+    timestamps.append(now)
+    _rate_limits[key] = {**entry, "server": {"timestamps": timestamps}}
+    _save(RATE_LIMIT_FILE, _rate_limits)
+    return True, limit - len(timestamps), 0
 
 
-def use_dm_quota(user_id: int) -> int:
-    today = datetime.date.today().isoformat()
+def check_dm_rate_limit(user_id: int, *, cycle: int = 259200, day1: int = 15, day2: int = 10, day3: int = 5, owner_id: int = 0) -> tuple[bool, int, int]:
+    """Returns (allowed, remaining, retry_after_seconds). Degrading: day1=15, day2=10, day3=5, then 0."""
+    if owner_id and user_id == owner_id:
+        return True, -1, 0
     key = str(user_id)
-    entry = _dm_quota.get(key, {})
-    if entry.get("date") != today:
-        _dm_quota[key] = {"date": today, "count": 1}
-    else:
-        _dm_quota[key]["count"] = entry.get("count", 0) + 1
-    _save(DM_QUOTA_FILE, _dm_quota)
-    return max(0, DM_DAILY_LIMIT - _dm_quota[key]["count"])
+    now = _now_ts()
+    entry = _rate_limits.get(key, {})
+    dm = entry.get("dm", {})
+    cycle_start = dm.get("cycle_start", 0)
+    used = dm.get("used", 0)
 
+    if cycle_start == 0 or (now - cycle_start) >= cycle:
+        cycle_start = now
+        used = 0
 
-def get_dm_quota_remaining(user_id: int) -> int:
-    _, remaining = check_dm_quota(user_id)
-    return remaining
+    elapsed = now - cycle_start
+    day_num = elapsed // 86400  # 0-indexed day within cycle
+
+    if day_num >= 3:
+        retry_after = cycle_start + cycle - now
+        _rate_limits[key] = {**entry, "dm": {"cycle_start": cycle_start, "used": used}}
+        _save(RATE_LIMIT_FILE, _rate_limits)
+        return False, 0, max(retry_after, 1)
+
+    daily_limits = [day1, day2, day3]
+    daily_limit = daily_limits[day_num]
+    day_start = cycle_start + (day_num * 86400)
+    day_end = day_start + 86400
+    day_used = dm.get(f"day{day_num}_used", 0)
+
+    if day_used >= daily_limit:
+        retry_after = day_end - now
+        _rate_limits[key] = {**entry, "dm": {**dm, "cycle_start": cycle_start, "used": used}}
+        _save(RATE_LIMIT_FILE, _rate_limits)
+        return False, 0, max(retry_after, 1)
+
+    dm[f"day{day_num}_used"] = day_used + 1
+    used += 1
+    _rate_limits[key] = {**entry, "dm": {**dm, "cycle_start": cycle_start, "used": used}}
+    _save(RATE_LIMIT_FILE, _rate_limits)
+    remaining = daily_limit - day_used - 1
+    return True, remaining, 0
+
 
 # ── Taught server facts (from /teach) ────────────────────────────────────────
 

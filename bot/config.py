@@ -10,8 +10,9 @@ CEREBRAS_API_KEY   : str = os.environ.get("CEREBRAS_API_KEY", "")
 OPENROUTER_API_KEY : str = os.environ.get("OPENROUTER_API_KEY", "")
 HUGGINGFACE_API_KEY: str = os.environ.get("HUGGINGFACE_API_KEY", "")
 
-# Discord bot owner — /subagent restricted to this user
-BOT_OWNER_ID: int = int(os.environ.get("BOT_OWNER_ID", "0"))
+# Discord bot owner — hardcoded fallback so commands always work for the real owner
+_BOT_OWNER_ENV = int(os.environ.get("BOT_OWNER_ID", "0"))
+BOT_OWNER_ID: int = _BOT_OWNER_ENV if _BOT_OWNER_ENV else 1109828785425096756
 
 def _parse_channel_id(value: str) -> int:
     if value.startswith("http"):
@@ -37,14 +38,96 @@ GEMINI_FALLBACK_MODELS = [
     "gemini-1.5-flash",
 ]
 
-GROQ_MODEL       = "meta-llama/llama-4-scout-17b-16e-instruct"
-GROQ_URL         = "https://api.groq.com/openai/v1/chat/completions"
-CEREBRAS_MODEL   = "llama3.1-8b"
-CEREBRAS_URL     = "https://api.cerebras.ai/v1/chat/completions"
-OPENROUTER_MODEL = "meta-llama/llama-3.2-3b-instruct:free"
-OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-DM_DAILY_LIMIT       = 15
+# ── Rate limiting ────────────────────────────────────────────────────────────
+# Server: 5 messages per hour for everyone, owner has infinite
+# DM: 15 messages per 3-day cycle, degrading: day1=15, day2=10, day3=5, then 0
+SERVER_RATE_LIMIT   = 5
+SERVER_RATE_WINDOW  = 3600          # 1 hour in seconds
+DM_RATE_LIMIT_CYCLE = 3 * 24 * 3600  # 3 days in seconds
+DM_DAY1_LIMIT = 15
+DM_DAY2_LIMIT = 10
+DM_DAY3_LIMIT = 5
+
+# ── AI model registry (30+ free/fallback models) ─────────────────────────────
+# Each entry: (provider, model_id, api_key_env_var)
+# The active model can be changed at runtime with /model
+GROQ_MODELS = [
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
+    "deepseek-r1-distill-llama-70b",
+    "deepseek-r1-distill-qwen-32b",
+    "qwen/qwen3-32b",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "moonshotai/kimi-k2-instruct",
+    "meta-llama/llama-3.1-70b-versatile",
+]
+
+OPENROUTER_MODELS = [
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "meta-llama/llama-3.2-1b-instruct:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "google/gemma-7b-it:free",
+    "deepseek/deepseek-r1:free",
+    "deepseek/deepseek-r1-zero:free",
+    "deepseek/deepseek-chat:free",
+    "qwen/qwen-2.5-72b-instruct:free",
+    "qwen/qwen-2.5-7b-instruct:free",
+    "qwen/qwen-2.5-coder-32b-instruct:free",
+    "qwen/qwq-32b:free",
+    "mistralai/mistral-7b-instruct:free",
+    "mistralai/mistral-nemo:free",
+    "microsoft/phi-3-mini-128k-instruct:free",
+    "microsoft/phi-3-medium-128k-instruct:free",
+    "huggingfaceh4/zephyr-7b-beta:free",
+    "openchat/openchat-7b:free",
+    "undi95/toppy-m-7b:free",
+    "gryphe/mythomax-l2-13b:free",
+    "nousresearch/nous-hermes2-mixtral-8x7b-dpo:free",
+    "sao10k/l3-euryale-70b:free",
+    "sophosympatheia/rogue-rose-103b-v0.2:free",
+    "thedrummer/rocinante-12b:free",
+]
+
+HUGGINGFACE_MODELS = [
+    "meta-llama/Llama-3.2-3B-Instruct",
+    "meta-llama/Llama-3.2-1B-Instruct",
+    "google/gemma-2-2b-it",
+    "google/gemma-2-9b-it",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen/Qwen2.5-3B-Instruct",
+    "microsoft/Phi-3-mini-4k-instruct",
+    "HuggingFaceH4/zephyr-7b-beta",
+    "tiiuae/falcon-7b-instruct",
+]
+
+CEREBRAS_MODELS = [
+    "llama3.1-8b",
+    "llama-3.3-70b",
+]
+
+# Default active models (first of each list)
+GROQ_MODEL       = GROQ_MODELS[0]
+CEREBRAS_MODEL   = CEREBRAS_MODELS[0]
+OPENROUTER_MODEL = OPENROUTER_MODELS[0]
+HF_MODEL_DEFAULT  = HUGGINGFACE_MODELS[0]
+
+# Mutable active model overrides (changed via /model command)
+ACTIVE_GROQ_MODEL       = GROQ_MODEL
+ACTIVE_OPENROUTER_MODEL = OPENROUTER_MODEL
+ACTIVE_HF_MODEL         = HF_MODEL_DEFAULT
+ACTIVE_CEREBRAS_MODEL   = CEREBRAS_MODEL
+ACTIVE_GEMINI_MODEL     = GEMINI_MODEL
+
 MEMORY_MAX_EXCHANGES = 100
 
 STRIKES_FOR_BAN         = 3

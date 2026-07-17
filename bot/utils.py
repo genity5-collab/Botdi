@@ -88,38 +88,102 @@ _PING_RE = re.compile(
     re.I,
 )
 
+# Patterns that indicate the AI is leaking API/provider internals
+_API_LEAK_PATTERNS = [
+    re.compile(r"(?:API|provider|model|Gemini|Groq|OpenRouter|HuggingFace|Cerebras|Llama|Gemma|DeepSeek|Qwen|Mistral|Phi)\s*(?:error|failed|unavailable|returned|key|token|limit|quota|rate)\s*[^\n.]*", re.I),
+    re.compile(r"\d{3}\s*(?:error|status|response|forbidden|unauthorized|not found|bad request)[^\n.]*", re.I),
+    re.compile(r"No AI provider available[^.]*", re.I),
+    re.compile(r"(?:sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{35}|hf_[A-Za-z0-9]{20,})", re.I),
+    re.compile(r"(?:rate|quota|limit)\s*(?:exceeded|reached|hit)[^\n.]*", re.I),
+    re.compile(r"(?:timeout|timed out|connection (?:refused|reset|error))[^\n.]*", re.I),
+    re.compile(r"(?:HTTP|HTTPS)\s*\d{3}[^\n.]*", re.I),
+    re.compile(r"(?:internal server error|service unavailable|gateway timeout|bad gateway)[^\n.]*", re.I),
+    re.compile(r"(?:invalid api key|authentication (?:failed|error)|unauthorized access)[^\n.]*", re.I),
+    re.compile(r"(?:model (?:not found|overloaded|deprecated|discontinued))[^\n.]*", re.I),
+    re.compile(r"(?:billing|credit|subscription)\s*(?:issue|problem|required|expired)[^\n.]*", re.I),
+]
+
 
 def sanitize_ai_output(text: str, *, user_message: str = "") -> str:
     text = _PING_RE.sub("", text)
     text = _OUTPUT_PROFANITY.sub("***", text)
-    for pattern in (
-        r"(?:API|provider|model|Gemini|Groq|OpenRouter|HuggingFace|Cerebras)\s*(?:error|failed|unavailable|returned)\s*[^\n.]*",
-        r"\d{3}\s*(?:error|status|response)[^\n.]*",
-        r"No AI provider available[^.]*",
-    ):
-        text = re.compile(pattern, re.I).sub("", text)
+    for pattern in _API_LEAK_PATTERNS:
+        text = pattern.sub("", text)
     text = re.sub(r"sk-[A-Za-z0-9]{20,}", "", text)
     text = re.sub(r"AIza[A-Za-z0-9_-]{35}", "", text)
+    text = re.sub(r"hf_[A-Za-z0-9]{20,}", "", text)
+    # Strip any leftover "I'll put this in my own words" prefix from previous version
+    text = re.sub(r"^I'll put this in my own words:\s*", "", text, flags=re.I)
     if user_message and _is_copying(text, user_message):
-        text = "I'll put this in my own words: " + text
+        text = _rephrase_copy(text, user_message)
     text = re.sub(r"\s{3,}", "\n", text)
     text = re.sub(r"^\s+|\s+$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 
 def _is_copying(ai_text: str, user_text: str) -> bool:
+    """Detect if AI is copying user's message verbatim or near-verbatim."""
     ai_lower = ai_text.lower().strip()
     user_lower = user_text.lower().strip()
     if not user_lower or not ai_lower:
         return False
     user_words = user_lower.split()
-    if len(user_words) < 6:
+    if len(user_words) < 4:
         return False
-    for i in range(len(user_words) - 7):
-        chunk = " ".join(user_words[i:i+8])
+    # Check 5-word chunks (lowered from 8 for stricter detection)
+    chunk_size = 5
+    for i in range(len(user_words) - chunk_size + 1):
+        chunk = " ".join(user_words[i:i + chunk_size])
         if chunk in ai_lower:
             return True
+    # Check if AI starts with the same 4+ words as user message
+    if len(user_words) >= 4:
+        first4 = " ".join(user_words[:4])
+        if ai_lower.startswith(first4):
+            return True
+    # Check if AI ends with the same 4+ words as user message
+    if len(user_words) >= 4:
+        last4 = " ".join(user_words[-4:])
+        if ai_lower.endswith(last4):
+            return True
+    # Check if >60% of user words appear in same order in AI text
+    if len(user_words) >= 6:
+        match_count = 0
+        search_pos = 0
+        for w in user_words:
+            idx = ai_lower.find(w, search_pos)
+            if idx != -1:
+                match_count += 1
+                search_pos = idx + len(w)
+        if match_count / len(user_words) > 0.6:
+            return True
     return False
+
+
+def _rephrase_copy(ai_text: str, user_text: str) -> str:
+    """When copying is detected, strip copied segments and rephrase."""
+    user_lower = user_text.lower().strip()
+    ai_lower = ai_text.lower()
+    # If the AI text is mostly the user's message, replace with a generic response
+    user_words = user_lower.split()
+    if len(user_words) >= 4:
+        # Remove any 5-word chunks that match user text
+        chunk_size = 5
+        words = ai_text.split()
+        result_words = list(words)
+        i = 0
+        while i < len(result_words) - chunk_size + 1:
+            chunk = " ".join(result_words[i:i + chunk_size]).lower()
+            if chunk in user_lower:
+                del result_words[i:i + chunk_size]
+            else:
+                i += 1
+        cleaned = " ".join(result_words).strip()
+        if cleaned and len(cleaned.split()) >= 3:
+            return cleaned
+    # Fallback: if we can't clean it, return a neutral response
+    return "I understand. Let me know if you need help with anything specific."
 
 
 def count_words(text: str) -> int:
