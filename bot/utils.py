@@ -13,7 +13,6 @@ from config import LOG_CHANNEL_ID, SUPPORT_LINK, BOT_COLOR
 
 _PII_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("email address",    re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")),
-    # Phone: requires + or () or explicit separators to avoid matching Discord IDs / 10-digit numbers
     ("phone number",     re.compile(r"(?:\+\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b|\+\d{10,15}")),
     ("SSN",              re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
     ("credit card",      re.compile(r"\b(?:\d[ \-]?){13,16}\b")),
@@ -21,7 +20,6 @@ _PII_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("home address",     re.compile(r"\d{1,5}\s+\w[\w\s]*\b(street|st|avenue|ave|road|rd|blvd|lane|ln|drive|dr|court|ct)\b", re.I)),
 ]
 
-# TOS-violating content
 _TOS_KEYWORDS: list[str] = [
     "buy account", "sell account", "account trade", "doxx", "dox ",
     "swat", "raid server", "ddos", "botnet", "self harm", "kill yourself",
@@ -39,7 +37,6 @@ _TOS_KEYWORDS: list[str] = [
     "school shooting", "mass shooting",
 ]
 
-# Words that trigger a warning when aimed at the bot (genuine profanity only)
 _PROFANITY: set[str] = {
     "fuck", "fucker", "fucking", "fuk", "f**k", "f*ck",
     "shit", "sh*t", "s**t",
@@ -54,7 +51,6 @@ _PROFANITY: set[str] = {
     "stfu", "shut the fuck up",
 }
 
-# Words to scrub from AI output (replaced with ***)
 _OUTPUT_PROFANITY = re.compile(
     r"\b(fuck(?:ing)?|shit|bitch|bastard|cunt|asshole|dick|motherfuck(?:er|ing)?|"
     r"retard(?:ed)?|faggot|whore|slut|cock|piss)\b",
@@ -63,7 +59,6 @@ _OUTPUT_PROFANITY = re.compile(
 
 
 def check_pii_tos(text: str) -> tuple[bool, str]:
-    """Returns (violated, reason). True if PII or TOS content detected."""
     for label, pattern in _PII_PATTERNS:
         if pattern.search(text):
             return True, f"Contains {label}"
@@ -75,17 +70,80 @@ def check_pii_tos(text: str) -> tuple[bool, str]:
 
 
 def check_profanity_at_bot(text: str) -> bool:
-    """True if the message contains profanity targeted at the bot."""
     lower = text.lower()
     return any(word in lower for word in _PROFANITY)
 
 
 def clean_ai_output(text: str, max_len: int = 380) -> str:
-    """Strip profanity from AI output and enforce length cap."""
     text = _OUTPUT_PROFANITY.sub("***", text)
     if len(text) > max_len:
         text = text[:max_len].rsplit(" ", 1)[0] + "…"
     return text
+
+
+# ── AI output sanitization ─────────────────────────────────────────────────────
+
+_PING_RE = re.compile(
+    r"@(?:everyone|here|&\d+|<@!?\d+>|<#\d+>|<@&\d+>)",
+    re.I,
+)
+
+
+def sanitize_ai_output(text: str, *, user_message: str = "") -> str:
+    """Remove pings, API error leaks, censor profanity, and block copying."""
+    text = _PING_RE.sub("", text)
+    text = _OUTPUT_PROFANITY.sub("***", text)
+    for pattern in (
+        r"(?:API|provider|model|Gemini|Groq|OpenRouter|HuggingFace|Cerebras)\s*(?:error|failed|unavailable|returned)\s*[^\n.]*",
+        r"\d{3}\s*(?:error|status|response)[^\n.]*",
+        r"No AI provider available[^.]*",
+    ):
+        text = re.compile(pattern, re.I).sub("", text)
+    text = re.sub(r"sk-[A-Za-z0-9]{20,}", "", text)
+    text = re.sub(r"AIza[A-Za-z0-9_-]{35}", "", text)
+    if user_message and _is_copying(text, user_message):
+        text = "I'll put this in my own words: " + text
+    text = re.sub(r"\s{3,}", "\n", text)
+    text = re.sub(r"^\s+|\s+$", "", text, flags=re.MULTILINE)
+    return text.strip()
+
+
+def _is_copying(ai_text: str, user_text: str) -> bool:
+    """Check if AI output is too similar to the user's message (anti-copy)."""
+    ai_lower = ai_text.lower().strip()
+    user_lower = user_text.lower().strip()
+    if not user_lower or not ai_lower:
+        return False
+    user_words = user_lower.split()
+    if len(user_words) < 6:
+        return False
+    for i in range(len(user_words) - 7):
+        chunk = " ".join(user_words[i:i+8])
+        if chunk in ai_lower:
+            return True
+    return False
+
+
+def count_words(text: str) -> int:
+    clean = re.sub(r"```[\s\S]*?```", " ", text)
+    return len(clean.split())
+
+
+def enforce_word_limit(text: str, *, is_code: bool = False, normal_limit: int = 40, code_limit: int = 100) -> str:
+    """Truncate text to word limit. Code responses get a higher limit."""
+    has_line_breaks = text.count("\n") >= 4
+    has_rhyme_pattern = bool(re.search(r"(\w+)\s*\n.*\1\s*$", text, re.MULTILINE))
+    if has_line_breaks and has_rhyme_pattern:
+        normal_limit = 25
+    limit = code_limit if is_code else normal_limit
+    words = text.split()
+    if len(words) <= limit:
+        return text
+    truncated = " ".join(words[:limit])
+    last_period = truncated.rfind(".")
+    if last_period > limit * 0.7:
+        truncated = truncated[:last_period + 1]
+    return truncated + "…"
 
 
 # ── Appeal embed ──────────────────────────────────────────────────────────────
@@ -107,7 +165,6 @@ def build_appeal_embed(reason: str = "") -> discord.Embed:
 # ── Action log ────────────────────────────────────────────────────────────────
 
 async def log_action(bot: discord.Client, title: str, description: str, color: int = 0xE74C3C) -> None:
-    """Send a log embed to LOG_CHANNEL_ID."""
     channel = bot.get_channel(LOG_CHANNEL_ID)
     if channel is None:
         return
@@ -121,10 +178,6 @@ async def log_action(bot: discord.Client, title: str, description: str, color: i
 # ── ID validation ─────────────────────────────────────────────────────────────
 
 def parse_user_id(argument: str) -> int | None:
-    """
-    Parse a Discord user ID from a mention (<@123>) or a raw integer string.
-    Returns the integer ID, or None if invalid.
-    """
     mention_match = re.match(r"<@!?(\d{17,20})>", argument)
     if mention_match:
         return int(mention_match.group(1))
