@@ -43,21 +43,19 @@ CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # ── Rate limiting ────────────────────────────────────────────────────────────
-# Server: 5 messages per hour for everyone, owner has infinite
+# Subagent: 5 per week for guild owners, bot owner infinite
+n# Server: 5 messages per hour for everyone, owner infinite
 # DM: 15 messages per 3-day cycle, degrading: day1=15, day2=10, day3=5, then 0
-# Subagent: 5 per week for guild owners, bot owner infinite, admins NOT allowed
+SUBAGENT_RATE_LIMIT    = 5
+SUBAGENT_RATE_WINDOW   = 7 * 24 * 3600  # 1 week
 SERVER_RATE_LIMIT      = 5
 SERVER_RATE_WINDOW     = 3600
 DM_RATE_LIMIT_CYCLE    = 3 * 24 * 3600
 DM_DAY1_LIMIT          = 15
 DM_DAY2_LIMIT          = 10
 DM_DAY3_LIMIT          = 5
-SUBAGENT_RATE_LIMIT    = 5
-SUBAGENT_RATE_WINDOW   = 7 * 24 * 3600  # 1 week
 
 # ── AI model registry ─────────────────────────────────────────────────────────
-# Models known to support native OpenAI-style tool/function calling
-# These are tried first for subagent function calling
 GROQ_TOOL_MODELS = [
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "meta-llama/llama-4-maverick-17b-128e-instruct",
@@ -85,7 +83,6 @@ CEREBRAS_TOOL_MODELS = [
     "llama-3.3-70b",
 ]
 
-# All available models for text generation (broader list)
 GROQ_MODELS = [
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "meta-llama/llama-4-maverick-17b-128e-instruct",
@@ -147,13 +144,11 @@ CEREBRAS_MODELS = [
     "llama-3.3-70b",
 ]
 
-# Default active models (first of each list)
 GROQ_MODEL       = GROQ_MODELS[0]
 CEREBRAS_MODEL   = CEREBRAS_MODELS[0]
 OPENROUTER_MODEL = OPENROUTER_MODELS[0]
 HF_MODEL_DEFAULT  = HUGGINGFACE_MODELS[0]
 
-# Mutable active model overrides (changed via /model command)
 ACTIVE_GROQ_MODEL       = GROQ_MODEL
 ACTIVE_OPENROUTER_MODEL = OPENROUTER_MODEL
 ACTIVE_HF_MODEL         = HF_MODEL_DEFAULT

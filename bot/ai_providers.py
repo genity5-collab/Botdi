@@ -7,9 +7,6 @@ Tries providers in order until one succeeds:
   3. OpenRouter (OpenAI-compatible REST, native tool calling on select models)
   4. Hugging Face (Inference API REST, text-based calling)
   5. Cerebras (OpenAI-compatible REST, native tool calling)
-
-For function calling (subagent), only models known to support native tool calling
-are tried first. If all fail, text-based function calling is used as fallback.
 """
 from __future__ import annotations
 
@@ -37,8 +34,6 @@ from config import (
 
 log = logging.getLogger("vyrion.ai_providers")
 
-# ── Gemini client (lazy) ──────────────────────────────────────────────────────
-
 _genai_client = None
 _genai_types = None
 
@@ -58,8 +53,6 @@ def _get_gemini():
         log.warning("google-genai unavailable: %s", e)
         return None, None
 
-
-# ── OpenAI-compatible REST helpers ────────────────────────────────────────────
 
 async def _openai_compat_chat(
     url: str,
@@ -95,8 +88,6 @@ async def _openai_compat_chat(
         return ""
 
 
-# ── Hugging Face Inference API ─────────────────────────────────────────────────
-
 HF_URL = "https://api-inference.huggingface.co/models/{model}"
 
 async def _huggingface_chat(
@@ -117,12 +108,10 @@ async def _huggingface_chat(
         role = "User" if m["role"] == "user" else "Assistant"
         convo_parts.append(f"{role}: {m['content']}")
     convo_parts.append("Assistant:")
-
     prompt = ""
     if system_parts:
         prompt += system_parts[0] + "\n\n"
     prompt += "\n".join(convo_parts)
-
     headers = {
         "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
         "Content-Type": "application/json",
@@ -152,8 +141,6 @@ async def _huggingface_chat(
         return ""
 
 
-# ── Gemini generate ────────────────────────────────────────────────────────────
-
 async def _gemini_generate(
     system_prompt: str,
     messages: list[dict],
@@ -165,13 +152,11 @@ async def _gemini_generate(
     client, gt = _get_gemini()
     if client is None or gt is None:
         return ""
-
     active_model = getattr(config, "ACTIVE_GEMINI_MODEL", GEMINI_MODEL)
     contents: list = []
     for m in messages[-30:]:
         role = "user" if m["role"] == "user" else "model"
         contents.append(gt.Content(role=role, parts=[gt.Part.from_text(text=m["content"])]))
-
     user_parts = [gt.Part.from_text(text=messages[-1]["content"] if messages else "")]
     for data, mime in (image_parts or []):
         user_parts.append(gt.Part.from_bytes(data=data, mime_type=mime))
@@ -179,7 +164,6 @@ async def _gemini_generate(
         contents[-1] = gt.Content(role="user", parts=user_parts)
     else:
         contents.append(gt.Content(role="user", parts=user_parts))
-
     models_to_try = [active_model, *GEMINI_FALLBACK_MODELS]
     for model_id in models_to_try:
         try:
@@ -201,8 +185,6 @@ async def _gemini_generate(
     return ""
 
 
-# ── Public API: generate with full fallback chain ─────────────────────────────
-
 async def generate(
     system_prompt: str,
     messages: list[dict],
@@ -211,7 +193,6 @@ async def generate(
     max_tokens: int = 200,
     image_parts: list[tuple[bytes, str]] | None = None,
 ) -> str:
-    """Generate text using the first provider/model that succeeds."""
     if GEMINI_API_KEY:
         text = await _gemini_generate(
             system_prompt, messages,
@@ -220,9 +201,7 @@ async def generate(
         )
         if text:
             return text
-
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
-
     if GROQ_API_KEY:
         active_groq = getattr(config, "ACTIVE_GROQ_MODEL", config.GROQ_MODELS[0])
         groq_models = [active_groq] + [m for m in config.GROQ_MODELS if m != active_groq]
@@ -233,7 +212,6 @@ async def generate(
             )
             if text:
                 return text
-
     if OPENROUTER_API_KEY:
         active_or = getattr(config, "ACTIVE_OPENROUTER_MODEL", config.OPENROUTER_MODELS[0])
         or_models = [active_or] + [m for m in config.OPENROUTER_MODELS if m != active_or]
@@ -244,7 +222,6 @@ async def generate(
             )
             if text:
                 return text
-
     if HUGGINGFACE_API_KEY:
         active_hf = getattr(config, "ACTIVE_HF_MODEL", config.HUGGINGFACE_MODELS[0])
         hf_models = [active_hf] + [m for m in config.HUGGINGFACE_MODELS if m != active_hf]
@@ -255,7 +232,6 @@ async def generate(
             )
             if text:
                 return text
-
     if CEREBRAS_API_KEY:
         active_cb = getattr(config, "ACTIVE_CEREBRAS_MODEL", config.CEREBRAS_MODELS[0])
         cb_models = [active_cb] + [m for m in config.CEREBRAS_MODELS if m != active_cb]
@@ -266,18 +242,14 @@ async def generate(
             )
             if text:
                 return text
-
     return "I'm having trouble responding right now. Try again in a moment."
 
-
-# ── Gemini function-calling (for subagent) ─────────────────────────────────────
 
 async def gemini_function_call(
     system_prompt: str,
     contents: list,
     tools: list,
 ) -> Any:
-    """Call Gemini with function-calling support."""
     client, gt = _get_gemini()
     if client is None or gt is None:
         return None
@@ -302,7 +274,6 @@ async def gemini_function_call(
 
 
 def get_genai_types():
-    """Return genai_types module or None."""
     _, gt = _get_gemini()
     return gt
 
@@ -312,24 +283,16 @@ def is_gemini_available() -> bool:
     return c is not None
 
 
-# ── OpenAI-compatible function calling (only tool-capable models) ──────────────
-
 async def openai_function_call(
     system_prompt: str,
     messages: list[dict],
     tools_json: list[dict],
     *,
-    temperature: float = 0.7,
-    max_tokens: int = 800,
+    temperature: float = 0.4,
+    max_tokens: int = 2000,
 ) -> dict | None:
-    """
-    Call an OpenAI-compatible endpoint with native tool calling.
-    Only uses models known to support function calling (GROQ_TOOL_MODELS, etc).
-    Returns {"tool_calls": [...], "content": ""} or {"tool_calls": None, "content": "..."} or None.
-    """
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
     openai_tools = [{"type": "function", "function": t} for t in tools_json]
-
     providers = []
     if GROQ_API_KEY:
         for m in config.GROQ_TOOL_MODELS:
@@ -340,7 +303,6 @@ async def openai_function_call(
     if CEREBRAS_API_KEY:
         for m in config.CEREBRAS_TOOL_MODELS:
             providers.append((CEREBRAS_URL, CEREBRAS_API_KEY, m))
-
     for url, key, model in providers:
         headers = {
             "Authorization": f"Bearer {key}",
@@ -367,7 +329,6 @@ async def openai_function_call(
                     msg = choice.get("message", {})
                     tool_calls_raw = msg.get("tool_calls")
                     content = msg.get("content") or ""
-
                     if tool_calls_raw:
                         parsed_calls = []
                         for tc in tool_calls_raw:
@@ -380,34 +341,24 @@ async def openai_function_call(
                                 fn_args = {}
                             parsed_calls.append({"name": fn_name, "arguments": fn_args})
                         return {"tool_calls": parsed_calls, "content": ""}
-
                     return {"tool_calls": None, "content": content.strip()}
         except Exception:
             continue
-
     return None
 
-
-# ── Text-based function calling fallback (works with ANY model) ───────────────
 
 async def text_function_call(
     system_prompt: str,
     messages: list[dict],
     tools_json: list[dict],
     *,
-    temperature: float = 0.7,
-    max_tokens: int = 800,
+    temperature: float = 0.4,
+    max_tokens: int = 2000,
 ) -> dict | None:
-    """
-    Text-based function calling fallback for models without native tool calling.
-    Injects tool schemas into the system prompt and parses JSON from the response.
-    Tries Gemini first, then all other providers.
-    """
     tool_descriptions = "\n".join(
         f"- {t['name']}: {t['description']}\n  params: {json.dumps(t['parameters'])}"
         for t in tools_json
     )
-
     injected_system = (
         f"{system_prompt}\n\n"
         "You have access to these functions:\n"
@@ -418,18 +369,13 @@ async def text_function_call(
         "After functions are executed, you will receive their results and can continue.\n"
         "If no function is needed, respond normally with text.\n"
     )
-
     rest_messages = [{"role": "system", "content": injected_system}] + messages
-
     text = ""
-
-    # Try Gemini first (it's best at following JSON instructions)
     if GEMINI_API_KEY:
         text = await _gemini_generate(
             injected_system, messages,
             temperature=temperature, max_tokens=max_tokens,
         )
-
     if not text and GROQ_API_KEY:
         for model in config.GROQ_MODELS:
             text = await _openai_compat_chat(
@@ -462,16 +408,13 @@ async def text_function_call(
             )
             if text:
                 break
-
     if not text:
         return None
-
     json_blocks = re.findall(r'```(?:json)?\s*(\[.*?\])\s*```', text, re.DOTALL)
     if not json_blocks:
         bare = re.match(r'\s*(\[.*?\])\s*$', text, re.DOTALL)
         if bare:
             json_blocks = [bare.group(1)]
-
     if json_blocks:
         try:
             calls = json.loads(json_blocks[0])
@@ -482,10 +425,8 @@ async def text_function_call(
                 return {"tool_calls": parsed, "content": ""}
         except json.JSONDecodeError:
             pass
-
     return {"tool_calls": None, "content": text.strip()}
 
 
 def is_any_provider_available() -> bool:
-    """Check if at least one AI provider is configured."""
     return bool(GEMINI_API_KEY or GROQ_API_KEY or OPENROUTER_API_KEY or CEREBRAS_API_KEY or HUGGINGFACE_API_KEY)
