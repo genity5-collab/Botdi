@@ -45,16 +45,47 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # ── Rate limiting ────────────────────────────────────────────────────────────
 # Server: 5 messages per hour for everyone, owner has infinite
 # DM: 15 messages per 3-day cycle, degrading: day1=15, day2=10, day3=5, then 0
-SERVER_RATE_LIMIT   = 5
-SERVER_RATE_WINDOW  = 3600          # 1 hour in seconds
-DM_RATE_LIMIT_CYCLE = 3 * 24 * 3600  # 3 days in seconds
-DM_DAY1_LIMIT = 15
-DM_DAY2_LIMIT = 10
-DM_DAY3_LIMIT = 5
+# Subagent: 5 per week for guild owners, bot owner infinite, admins NOT allowed
+SERVER_RATE_LIMIT      = 5
+SERVER_RATE_WINDOW     = 3600
+DM_RATE_LIMIT_CYCLE    = 3 * 24 * 3600
+DM_DAY1_LIMIT          = 15
+DM_DAY2_LIMIT          = 10
+DM_DAY3_LIMIT          = 5
+SUBAGENT_RATE_LIMIT    = 5
+SUBAGENT_RATE_WINDOW   = 7 * 24 * 3600  # 1 week
 
-# ── AI model registry (30+ free/fallback models) ─────────────────────────────
-# Each entry: (provider, model_id, api_key_env_var)
-# The active model can be changed at runtime with /model
+# ── AI model registry ─────────────────────────────────────────────────────────
+# Models known to support native OpenAI-style tool/function calling
+# These are tried first for subagent function calling
+GROQ_TOOL_MODELS = [
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "qwen/qwen3-32b",
+    "deepseek-r1-distill-llama-70b",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "moonshotai/kimi-k2-instruct",
+    "meta-llama/llama-3.1-70b-versatile",
+]
+
+OPENROUTER_TOOL_MODELS = [
+    "google/gemini-flash-1.5:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen-2.5-72b-instruct:free",
+    "qwen/qwen-2.5-coder-32b-instruct:free",
+    "deepseek/deepseek-chat:free",
+    "mistralai/mistral-nemo:free",
+]
+
+CEREBRAS_TOOL_MODELS = [
+    "llama3.1-8b",
+    "llama-3.3-70b",
+]
+
+# All available models for text generation (broader list)
 GROQ_MODELS = [
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "meta-llama/llama-4-maverick-17b-128e-instruct",
@@ -105,6 +136,7 @@ HUGGINGFACE_MODELS = [
     "mistralai/Mistral-7B-Instruct-v0.3",
     "Qwen/Qwen2.5-7B-Instruct",
     "Qwen/Qwen2.5-3B-Instruct",
+    "Qwen/Qwen2.5-Coder-32B-Instruct",
     "microsoft/Phi-3-mini-4k-instruct",
     "HuggingFaceH4/zephyr-7b-beta",
     "tiiuae/falcon-7b-instruct",

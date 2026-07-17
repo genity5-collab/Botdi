@@ -145,7 +145,8 @@ async def clear_memory(user_id: int) -> None:
 
 # ── Rate limiting ────────────────────────────────────────────────────────────
 # Server: 5 msgs per hour (owner = infinite)
-# DM: 15 msgs per 3-day cycle, degrading: day1=15, day2=10, day3=5, then 0 until cycle resets
+# DM: 15 msgs per 3-day cycle, degrading: day1=15, day2=10, day3=5, then 0
+# Subagent: 5 per week for guild owners, bot owner infinite
 
 def _now_ts() -> int:
     return int(time.time())
@@ -154,7 +155,7 @@ def _now_ts() -> int:
 def check_server_rate_limit(user_id: int, *, limit: int = 5, window: int = 3600, owner_id: int = 0) -> tuple[bool, int, int]:
     """Returns (allowed, remaining, retry_after_seconds)."""
     if owner_id and user_id == owner_id:
-        return True, -1, 0  # infinite for owner
+        return True, -1, 0
     key = str(user_id)
     now = _now_ts()
     entry = _rate_limits.get(key, {})
@@ -174,7 +175,7 @@ def check_server_rate_limit(user_id: int, *, limit: int = 5, window: int = 3600,
 
 
 def check_dm_rate_limit(user_id: int, *, cycle: int = 259200, day1: int = 15, day2: int = 10, day3: int = 5, owner_id: int = 0) -> tuple[bool, int, int]:
-    """Returns (allowed, remaining, retry_after_seconds). Degrading: day1=15, day2=10, day3=5, then 0."""
+    """Returns (allowed, remaining, retry_after_seconds)."""
     if owner_id and user_id == owner_id:
         return True, -1, 0
     key = str(user_id)
@@ -189,7 +190,7 @@ def check_dm_rate_limit(user_id: int, *, cycle: int = 259200, day1: int = 15, da
         used = 0
 
     elapsed = now - cycle_start
-    day_num = elapsed // 86400  # 0-indexed day within cycle
+    day_num = elapsed // 86400
 
     if day_num >= 3:
         retry_after = cycle_start + cycle - now
@@ -215,6 +216,28 @@ def check_dm_rate_limit(user_id: int, *, cycle: int = 259200, day1: int = 15, da
     _save(RATE_LIMIT_FILE, _rate_limits)
     remaining = daily_limit - day_used - 1
     return True, remaining, 0
+
+
+def check_subagent_rate_limit(user_id: int, *, limit: int = 5, window: int = 604800, owner_id: int = 0) -> tuple[bool, int, int]:
+    """Returns (allowed, remaining, retry_after_seconds). Bot owner = infinite."""
+    if owner_id and user_id == owner_id:
+        return True, -1, 0
+    key = str(user_id)
+    now = _now_ts()
+    entry = _rate_limits.get(key, {})
+    sub = entry.get("subagent", {})
+    timestamps: list = sub.get("timestamps", [])
+    cutoff = now - window
+    timestamps = [t for t in timestamps if t > cutoff]
+    if len(timestamps) >= limit:
+        retry_after = timestamps[0] + window - now
+        _rate_limits[key] = {**entry, "subagent": {"timestamps": timestamps}}
+        _save(RATE_LIMIT_FILE, _rate_limits)
+        return False, 0, max(retry_after, 1)
+    timestamps.append(now)
+    _rate_limits[key] = {**entry, "subagent": {"timestamps": timestamps}}
+    _save(RATE_LIMIT_FILE, _rate_limits)
+    return True, limit - len(timestamps), 0
 
 
 # ── Taught server facts (from /teach) ────────────────────────────────────────
