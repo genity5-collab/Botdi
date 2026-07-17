@@ -245,3 +245,1183 @@ def _get_role_perms(role_name: str, explicit_perms: str = "") -> str:
         if key in lower:
             return perms
     return "view_channel,send_messages,read_message_history"
+
+
+# ── Tool declarations ─────────────────────────────────────────────────────────
+
+def _build_tools() -> list:
+    if genai_types is None:
+        return []
+    fd = genai_types.FunctionDeclaration
+    Tool = genai_types.Tool
+
+    def decl(name, desc, props, required):
+        return fd(name=name, description=desc, parameters_json_schema={
+            "type": "object", "properties": props, "required": required,
+        })
+
+    return [Tool(function_declarations=[
+        decl("create_text_channel", "Create a new text channel. Use set_channel_permissions after if role-restricted access is needed.", {
+            "name": {"type": "string", "description": "Channel name, lowercase with hyphens. Add emoji decoration e.g. 'general-chat' or 'rules'"},
+            "category": {"type": "string", "description": "Optional: category name to place channel in"},
+            "topic": {"type": "string", "description": "Optional: channel topic with emoji decoration e.g. '💬 General chat for everyone'"},
+        }, ["name"]),
+        decl("create_voice_channel", "Create a new voice channel.", {
+            "name": {"type": "string", "description": "Channel name"},
+            "category": {"type": "string", "description": "Optional: category name"},
+            "user_limit": {"type": "integer", "description": "Max users (0 = unlimited)"},
+        }, ["name"]),
+        decl("create_category", "Create a new channel category to organize channels.", {
+            "name": {"type": "string", "description": "Category name e.g. 'Information', 'Voice Channels', 'Staff'"},
+        }, ["name"]),
+        decl("create_role", "Create a new role with specific permissions. If no permissions specified, the system auto-detects role type and sets appropriate permissions.", {
+            "name": {"type": "string", "description": "Role name e.g. 'Moderator', 'VIP', 'YouTuber'"},
+            "color": {"type": "string", "description": "Hex color e.g. '#FF0000' for red, '#5865F2' for blurple, '#2B2D31' for dark"},
+            "hoist": {"type": "boolean", "description": "Display separately in member list (default false). Set true for VIP/Moderator roles"},
+            "mentionable": {"type": "boolean", "description": "Allow @mention (default false). Set true for most roles"},
+            "permissions": {"type": "string", "description": "Comma-separated permission flags. If omitted, system auto-detects from role name."},
+        }, ["name"]),
+        decl("set_channel_permissions", "Set permission overwrites for a channel. Use to restrict channel access to specific roles. For @everyone role, use role_name='@everyone'. Always set @everyone FIRST, then specific roles, then staff roles.", {
+            "channel_name": {"type": "string", "description": "Channel name to set permissions on"},
+            "role_name": {"type": "string", "description": "Role name. Use '@everyone' for the everyone role"},
+            "allow": {"type": "string", "description": "Comma-separated permission flags to ALLOW e.g. 'view_channel,send_messages,read_message_history'. Leave empty for none"},
+            "deny": {"type": "string", "description": "Comma-separated permission flags to DENY e.g. 'view_channel'. Leave empty for none"},
+        }, ["channel_name", "role_name"]),
+        decl("send_message", "Send a plain text message to a channel. Content is filtered for rule-breaking content.", {
+            "channel_name": {"type": "string", "description": "Target channel name (without #)"},
+            "content": {"type": "string", "description": "Message content. Can include emoji decoration. Slurs and hate speech are blocked."},
+        }, ["channel_name", "content"]),
+        decl("send_embed", "Send a rich embed to a channel. Use for announcements, welcome messages, rules, etc. Make it visually appealing.", {
+            "channel_name": {"type": "string", "description": "Target channel name (without #)"},
+            "title": {"type": "string", "description": "Embed title with emoji e.g. '🌟 Welcome to the Server!'"},
+            "description": {"type": "string", "description": "Embed body text. Can be multi-line with formatting"},
+            "color": {"type": "string", "description": "Hex color e.g. '#FF0000' (red), '#23A55A' (green), '#5865F2' (blurple), '#F0B132' (gold), '#9B59B6' (purple), '#E91E63' (pink)"},
+            "footer": {"type": "string", "description": "Optional: footer text e.g. 'Vyrion Subagent'"},
+            "image_url": {"type": "string", "description": "Optional: banner image URL"},
+            "thumbnail_url": {"type": "string", "description": "Optional: small thumbnail image URL (top-right)"},
+            "author_name": {"type": "string", "description": "Optional: author name shown at top of embed"},
+            "author_icon_url": {"type": "string", "description": "Optional: author avatar icon URL"},
+            "field_name": {"type": "string"}, "field_value": {"type": "string"}, "field_inline": {"type": "boolean"},
+            "field2_name": {"type": "string"}, "field2_value": {"type": "string"}, "field2_inline": {"type": "boolean"},
+            "field3_name": {"type": "string"}, "field3_value": {"type": "string"}, "field3_inline": {"type": "boolean"},
+            "timestamp": {"type": "boolean", "description": "Optional: set to true to show current timestamp"},
+        }, ["channel_name", "title", "description"]),
+        decl("send_poll", "Send an interactive poll with buttons. Users click to vote. Results shown after duration.", {
+            "channel_name": {"type": "string", "description": "Target channel name"},
+            "question": {"type": "string", "description": "Poll question with emoji e.g. '🎮 What game should we play?'"},
+            "options": {"type": "array", "items": {"type": "string"}, "description": "2-5 poll options as strings"},
+            "duration_minutes": {"type": "integer", "description": "Optional: poll duration in minutes (default 60)"},
+        }, ["channel_name", "question", "options"]),
+        decl("send_button_embed", "Send an embed with interactive buttons. Use for role selection, confirmation prompts, etc.", {
+            "channel_name": {"type": "string", "description": "Target channel name"},
+            "title": {"type": "string", "description": "Embed title"},
+            "description": {"type": "string", "description": "Embed description"},
+            "color": {"type": "string", "description": "Hex color"},
+            "buttons": {"type": "array", "items": {"type": "object", "properties": {
+                "label": {"type": "string", "description": "Button label"},
+                "style": {"type": "string", "description": "Button style: 'primary' (blurple), 'success' (green), 'danger' (red), 'secondary' (grey)"},
+                "custom_id": {"type": "string", "description": "Unique ID for this button e.g. 'role_gamer'"},
+                "emoji": {"type": "string", "description": "Optional: emoji for the button"},
+            }}, "description": "Array of 1-5 button objects"},
+        }, ["channel_name", "title", "description", "buttons"]),
+        decl("send_game", "Send a mini-game embed that users can play by clicking buttons.", {
+            "channel_name": {"type": "string", "description": "Target channel name"},
+            "game_type": {"type": "string", "description": "Game type: 'trivia', 'would_you_rather', 'rock_paper_scissors'"},
+            "question": {"type": "string", "description": "Game question or prompt"},
+            "options": {"type": "array", "items": {"type": "string"}, "description": "Game options/choices"},
+        }, ["channel_name", "game_type", "question"]),
+        decl("add_role_to_user", "Assign a role to a user.", {
+            "role_name": {"type": "string"}, "user": {"type": "string"},
+        }, ["role_name", "user"]),
+        decl("remove_role_from_user", "Remove a role from a user.", {
+            "role_name": {"type": "string"}, "user": {"type": "string"},
+        }, ["role_name", "user"]),
+        decl("rename_channel", "Rename a channel.", {
+            "current_name": {"type": "string"}, "new_name": {"type": "string"},
+        }, ["current_name", "new_name"]),
+        decl("set_slowmode", "Set slowmode on a text channel.", {
+            "channel_name": {"type": "string"}, "seconds": {"type": "integer", "description": "Slowmode seconds (0-21600)"},
+        }, ["channel_name", "seconds"]),
+        decl("set_channel_topic", "Set the topic of a text channel.", {
+            "channel_name": {"type": "string"}, "topic": {"type": "string"},
+        }, ["channel_name", "topic"]),
+        decl("delete_channel", "Delete a channel by name. User will be asked to confirm.", {
+            "channel_name": {"type": "string"},
+        }, ["channel_name"]),
+        decl("create_scheduled_event", "Create a scheduled event in the server.", {
+            "name": {"type": "string"}, "description": {"type": "string"},
+            "start_time": {"type": "string", "description": "ISO 8601 format e.g. 2025-01-15T20:00:00"},
+            "end_time": {"type": "string"}, "channel_name": {"type": "string"}, "location": {"type": "string"},
+        }, ["name", "start_time"]),
+        decl("edit_scheduled_event", "Edit an existing scheduled event.", {
+            "event_name": {"type": "string"}, "new_name": {"type": "string"},
+            "new_description": {"type": "string"}, "new_start_time": {"type": "string"},
+        }, ["event_name"]),
+        decl("delete_scheduled_event", "Delete a scheduled event by name. User will be asked to confirm.", {
+            "event_name": {"type": "string"},
+        }, ["event_name"]),
+        decl("create_forum_channel", "Create a forum channel.", {
+            "name": {"type": "string"}, "category": {"type": "string"}, "topic": {"type": "string"},
+        }, ["name"]),
+        decl("create_announcement_channel", "Create an announcement channel.", {
+            "name": {"type": "string"}, "category": {"type": "string"}, "topic": {"type": "string"},
+        }, ["name"]),
+        decl("create_stage_channel", "Create a stage channel.", {
+            "name": {"type": "string"}, "category": {"type": "string"},
+        }, ["name"]),
+        decl("create_invite", "Create an invite for a channel.", {
+            "channel_name": {"type": "string"}, "max_age": {"type": "integer"}, "max_uses": {"type": "integer"},
+        }, ["channel_name"]),
+        decl("kick_member", "Kick a member from the server.", {
+            "user": {"type": "string"}, "reason": {"type": "string"},
+        }, ["user"]),
+        decl("ban_member", "Ban a member from the server.", {
+            "user": {"type": "string"}, "reason": {"type": "string"},
+        }, ["user"]),
+        decl("timeout_member", "Timeout a member.", {
+            "user": {"type": "string"}, "minutes": {"type": "integer"}, "reason": {"type": "string"},
+        }, ["user", "minutes"]),
+        decl("send_dm", "Send a DM to a server member.", {
+            "user": {"type": "string"}, "content": {"type": "string"},
+        }, ["user", "content"]),
+        decl("edit_role", "Edit an existing role's permissions, color, or name.", {
+            "role_name": {"type": "string"}, "new_name": {"type": "string"}, "color": {"type": "string"},
+            "permissions": {"type": "string"}, "hoist": {"type": "boolean"}, "mentionable": {"type": "boolean"},
+        }, ["role_name"]),
+        decl("delete_role", "Delete a role by name. User will be asked to confirm.", {
+            "role_name": {"type": "string"},
+        }, ["role_name"]),
+        decl("reorder_channel", "Move a channel to a different category or reorder it.", {
+            "channel_name": {"type": "string"}, "category": {"type": "string"}, "position": {"type": "integer"},
+        }, ["channel_name"]),
+        decl("read_logs", "Read recent bot logs. Optional level filter (INFO/WARNING/ERROR). Returns last N entries.", {
+            "count": {"type": "integer"}, "level": {"type": "string"},
+        }, []),
+        decl("edit_bot_message", "Edit a message previously sent by the bot. Provide the message ID and new content.", {
+            "message_id": {"type": "string"}, "channel_name": {"type": "string"}, "new_content": {"type": "string"},
+        }, ["message_id", "channel_name", "new_content"]),
+        decl("send_gif", "Search and send a GIF to a channel. Use for adding visual flair to announcements and messages.", {
+            "channel_name": {"type": "string"}, "query": {"type": "string"},
+        }, ["channel_name", "query"]),
+    ])]
+
+
+def _build_tools_json() -> list[dict]:
+    def t(name, desc, props, required):
+        return {"name": name, "description": desc, "parameters": {"type": "object", "properties": props, "required": required}}
+    return [
+        t("create_text_channel", "Create a new text channel.", {"name": {"type": "string"}, "category": {"type": "string"}, "topic": {"type": "string"}}, ["name"]),
+        t("create_voice_channel", "Create a new voice channel.", {"name": {"type": "string"}, "category": {"type": "string"}, "user_limit": {"type": "integer"}}, ["name"]),
+        t("create_category", "Create a new channel category.", {"name": {"type": "string"}}, ["name"]),
+        t("create_role", "Create a new role with permissions. Auto-detects role type if permissions omitted.", {"name": {"type": "string"}, "color": {"type": "string"}, "hoist": {"type": "boolean"}, "mentionable": {"type": "boolean"}, "permissions": {"type": "string"}}, ["name"]),
+        t("set_channel_permissions", "Set permission overwrites for a channel. Use '@everyone' for everyone role.", {"channel_name": {"type": "string"}, "role_name": {"type": "string"}, "allow": {"type": "string"}, "deny": {"type": "string"}}, ["channel_name", "role_name"]),
+        t("send_message", "Send a plain text message. Content filtered for rules.", {"channel_name": {"type": "string"}, "content": {"type": "string"}}, ["channel_name", "content"]),
+        t("send_embed", "Send a rich embed.", {"channel_name": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "color": {"type": "string"}, "footer": {"type": "string"}, "image_url": {"type": "string"}, "thumbnail_url": {"type": "string"}, "author_name": {"type": "string"}, "author_icon_url": {"type": "string"}, "field_name": {"type": "string"}, "field_value": {"type": "string"}, "field_inline": {"type": "boolean"}, "field2_name": {"type": "string"}, "field2_value": {"type": "string"}, "field2_inline": {"type": "boolean"}, "field3_name": {"type": "string"}, "field3_value": {"type": "string"}, "field3_inline": {"type": "boolean"}, "timestamp": {"type": "boolean"}}, ["channel_name", "title", "description"]),
+        t("send_poll", "Send an interactive poll with buttons.", {"channel_name": {"type": "string"}, "question": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}, "duration_minutes": {"type": "integer"}}, ["channel_name", "question", "options"]),
+        t("send_button_embed", "Send an embed with interactive buttons.", {"channel_name": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "color": {"type": "string"}, "buttons": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "style": {"type": "string"}, "custom_id": {"type": "string"}, "emoji": {"type": "string"}}}}}, ["channel_name", "title", "description", "buttons"]),
+        t("send_game", "Send a mini-game embed.", {"channel_name": {"type": "string"}, "game_type": {"type": "string"}, "question": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}, ["channel_name", "game_type", "question"]),
+        t("add_role_to_user", "Assign a role to a user.", {"role_name": {"type": "string"}, "user": {"type": "string"}}, ["role_name", "user"]),
+        t("remove_role_from_user", "Remove a role from a user.", {"role_name": {"type": "string"}, "user": {"type": "string"}}, ["role_name", "user"]),
+        t("rename_channel", "Rename a channel.", {"current_name": {"type": "string"}, "new_name": {"type": "string"}}, ["current_name", "new_name"]),
+        t("set_slowmode", "Set slowmode on a text channel.", {"channel_name": {"type": "string"}, "seconds": {"type": "integer"}}, ["channel_name", "seconds"]),
+        t("set_channel_topic", "Set the topic of a text channel.", {"channel_name": {"type": "string"}, "topic": {"type": "string"}}, ["channel_name", "topic"]),
+        t("delete_channel", "Delete a channel. User confirms.", {"channel_name": {"type": "string"}}, ["channel_name"]),
+        t("create_scheduled_event", "Create a scheduled event.", {"name": {"type": "string"}, "description": {"type": "string"}, "start_time": {"type": "string"}, "end_time": {"type": "string"}, "channel_name": {"type": "string"}, "location": {"type": "string"}}, ["name", "start_time"]),
+        t("edit_scheduled_event", "Edit a scheduled event.", {"event_name": {"type": "string"}, "new_name": {"type": "string"}, "new_description": {"type": "string"}, "new_start_time": {"type": "string"}}, ["event_name"]),
+        t("delete_scheduled_event", "Delete a scheduled event. User confirms.", {"event_name": {"type": "string"}}, ["event_name"]),
+        t("create_forum_channel", "Create a forum channel.", {"name": {"type": "string"}, "category": {"type": "string"}, "topic": {"type": "string"}}, ["name"]),
+        t("create_announcement_channel", "Create an announcement channel.", {"name": {"type": "string"}, "category": {"type": "string"}, "topic": {"type": "string"}}, ["name"]),
+        t("create_stage_channel", "Create a stage channel.", {"name": {"type": "string"}, "category": {"type": "string"}}, ["name"]),
+        t("create_invite", "Create an invite.", {"channel_name": {"type": "string"}, "max_age": {"type": "integer"}, "max_uses": {"type": "integer"}}, ["channel_name"]),
+        t("kick_member", "Kick a member.", {"user": {"type": "string"}, "reason": {"type": "string"}}, ["user"]),
+        t("ban_member", "Ban a member.", {"user": {"type": "string"}, "reason": {"type": "string"}}, ["user"]),
+        t("timeout_member", "Timeout a member.", {"user": {"type": "string"}, "minutes": {"type": "integer"}, "reason": {"type": "string"}}, ["user", "minutes"]),
+        t("send_dm", "Send a DM to a member.", {"user": {"type": "string"}, "content": {"type": "string"}}, ["user", "content"]),
+        t("edit_role", "Edit an existing role.", {"role_name": {"type": "string"}, "new_name": {"type": "string"}, "color": {"type": "string"}, "permissions": {"type": "string"}, "hoist": {"type": "boolean"}, "mentionable": {"type": "boolean"}}, ["role_name"]),
+        t("delete_role", "Delete a role. User confirms.", {"role_name": {"type": "string"}}, ["role_name"]),
+        t("reorder_channel", "Move a channel to a different category.", {"channel_name": {"type": "string"}, "category": {"type": "string"}, "position": {"type": "integer"}}, ["channel_name"]),
+        t("read_logs", "Read recent bot logs.", {"count": {"type": "integer"}, "level": {"type": "string"}}, []),
+        t("edit_bot_message", "Edit a bot message.", {"message_id": {"type": "string"}, "channel_name": {"type": "string"}, "new_content": {"type": "string"}}, ["message_id", "channel_name", "new_content"]),
+        t("send_gif", "Search and send a GIF.", {"channel_name": {"type": "string"}, "query": {"type": "string"}}, ["channel_name", "query"]),
+    ]
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _hex_to_int(color_hex: str) -> int:
+    c = (color_hex or "").lstrip("#")
+    try:
+        return int(c, 16)
+    except (ValueError, TypeError):
+        return 0x5865F2
+
+
+def _find_channel(guild: discord.Guild, name: str) -> discord.abc.GuildChannel | None:
+    clean = name.lower().lstrip("#").strip()
+    for ch in guild.channels:
+        if ch.name.lower() == clean:
+            return ch
+    channel_map = {ch.name.lower(): ch for ch in guild.channels}
+    matches = difflib.get_close_matches(clean, list(channel_map.keys()), n=1, cutoff=0.6)
+    if matches:
+        return channel_map[matches[0]]
+    return None
+
+
+def _find_role(guild: discord.Guild, name: str) -> discord.Role | None:
+    clean = name.lower().lstrip("@").strip()
+    if clean == "everyone":
+        return guild.default_role
+    for r in guild.roles:
+        if r.name.lower() == clean:
+            return r
+    role_map = {r.name.lower(): r for r in guild.roles}
+    matches = difflib.get_close_matches(clean, list(role_map.keys()), n=1, cutoff=0.6)
+    if matches:
+        return role_map[matches[0]]
+    return None
+
+
+def _find_similar_channel(guild: discord.Guild, name: str) -> discord.abc.GuildChannel | None:
+    clean = name.lower().lstrip("#").strip()
+    channel_map = {ch.name.lower(): ch for ch in guild.channels}
+    if clean in channel_map:
+        return channel_map[clean]
+    matches = difflib.get_close_matches(clean, list(channel_map.keys()), n=1, cutoff=0.6)
+    return channel_map[matches[0]] if matches else None
+
+
+def _find_similar_role(guild: discord.Guild, name: str) -> discord.Role | None:
+    clean = name.lower().lstrip("@").strip()
+    if clean == "everyone":
+        return guild.default_role
+    role_map = {r.name.lower(): r for r in guild.roles}
+    if clean in role_map:
+        return role_map[clean]
+    matches = difflib.get_close_matches(clean, list(role_map.keys()), n=1, cutoff=0.6)
+    return role_map[matches[0]] if matches else None
+
+
+GIPHY_BETA_KEY = "dc6zaTOxFJmzC"
+
+
+async def _search_gif(query: str) -> str | None:
+    url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_BETA_KEY}&q={query}&limit=1&rating=pg"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                gifs = data.get("data", [])
+                if gifs:
+                    return gifs[0].get("images", {}).get("original", {}).get("url")
+    except Exception:
+        return None
+    return None
+
+
+def _read_recent_logs(count: int = 10, level: str = "") -> str:
+    log_file = Path(__file__).parent / "data" / "recent_logs.json"
+    if not log_file.exists():
+        return "No log file found."
+    try:
+        data = json.loads(log_file.read_text())
+        entries = data.get("entries", [])
+        if level:
+            entries = [e for e in entries if e.get("level", "") == level.upper()]
+        entries = entries[-count:]
+        if not entries:
+            return "No log entries found."
+        return "\n".join(f"[{e['ts']}] {e['level']}: {e['msg']}" for e in entries)
+    except (json.JSONDecodeError, OSError):
+        return "Failed to read logs."
+
+
+async def _find_member(guild: discord.Guild, query: str) -> discord.Member | None:
+    if query.isdigit():
+        return guild.get_member(int(query))
+    member = guild.get_member_named(query)
+    if member:
+        return member
+    for m in guild.members:
+        if m.name.lower() == query.lower() or m.display_name.lower() == query.lower():
+            return m
+    return None
+
+
+def _parse_iso_dt(s: str) -> datetime.datetime | None:
+    if not s:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
+# ── Interactive Views ──────────────────────────────────────────────────────────
+
+class ConfirmView(discord.ui.View):
+    def __init__(self, owner_id: int, timeout: int = 30):
+        super().__init__(timeout=timeout)
+        self.owner_id = owner_id
+        self.result: bool | None = None
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Only the requester can confirm.", ephemeral=True)
+            return
+        self.result = True
+        for c in self.children:
+            c.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Only the requester can cancel.", ephemeral=True)
+            return
+        self.result = False
+        for c in self.children:
+            c.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+
+class PollView(discord.ui.View):
+    def __init__(self, question: str, options: list[str], duration_minutes: int = 60):
+        super().__init__(timeout=duration_minutes * 60)
+        self.question = question
+        self.votes: dict[str, list[str]] = {opt: [] for opt in options}
+        self.user_votes: dict[int, str] = {}
+        for i, opt in enumerate(options[:5]):
+            emoji = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"][i]
+            btn = discord.ui.Button(label=opt[:80], style=discord.ButtonStyle.primary, emoji=emoji, custom_id=f"poll_{i}")
+            btn.callback = self._make_callback(opt)
+            self.add_item(btn)
+
+    def _make_callback(self, option: str):
+        async def callback(interaction: discord.Interaction) -> None:
+            uid = interaction.user.id
+            if uid in self.user_votes:
+                old = self.user_votes[uid]
+                if old in self.votes:
+                    self.votes[old].remove(uid)
+            self.user_votes[uid] = option
+            self.votes[option].append(uid)
+            total = sum(len(v) for v in self.votes.values())
+            desc_lines = []
+            for opt, voters in self.votes.items():
+                pct = (len(voters) / total * 100) if total else 0
+                bar = "█" * int(pct / 10) + "░" * (10 - int(pct / 10))
+                desc_lines.append(f"{bar} **{opt}** — {len(voters)} vote(s) ({pct:.0f}%)")
+            embed = discord.Embed(title=f"📊 {self.question}", description="\n".join(desc_lines), color=BOT_COLOR)
+            embed.set_footer(text=f"{total} total vote(s)")
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
+    async def on_timeout(self) -> None:
+        total = sum(len(v) for v in self.votes.values())
+        desc_lines = []
+        for opt, voters in sorted(self.votes.items(), key=lambda x: len(x[1]), reverse=True):
+            pct = (len(voters) / total * 100) if total else 0
+            bar = "█" * int(pct / 10) + "░" * (10 - int(pct / 10))
+            desc_lines.append(f"{bar} **{opt}** — {len(voters)} vote(s) ({pct:.0f}%)")
+        embed = discord.Embed(title=f"📊 {self.question} [POLL CLOSED]", description="\n".join(desc_lines), color=COLOR_OK)
+        embed.set_footer(text=f"Final results — {total} total vote(s)")
+        for c in self.children:
+            c.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(embed=embed, view=self)
+            except Exception:
+                pass
+
+
+class ButtonEmbedView(discord.ui.View):
+    def __init__(self, buttons: list[dict]):
+        super().__init__(timeout=None)
+        for btn_data in buttons[:5]:
+            style_map = {
+                "primary": discord.ButtonStyle.primary,
+                "success": discord.ButtonStyle.success,
+                "danger": discord.ButtonStyle.danger,
+                "secondary": discord.ButtonStyle.secondary,
+            }
+            btn = discord.ui.Button(
+                label=btn_data.get("label", "Click")[:80],
+                style=style_map.get(btn_data.get("style", "primary"), discord.ButtonStyle.primary),
+                custom_id=btn_data.get("custom_id", btn_data.get("label", "btn").lower().replace(" ", "_")),
+                emoji=btn_data.get("emoji", "") or None,
+            )
+            btn.callback = self._make_callback(btn_data.get("custom_id", btn_data.get("label", "btn")))
+            self.add_item(btn)
+
+    def _make_callback(self, custom_id: str):
+        async def callback(interaction: discord.Interaction) -> None:
+            if custom_id.startswith("role_"):
+                role_name = custom_id[5:].replace("_", " ")
+                role = discord.utils.find(lambda r: r.name.lower() == role_name.lower(), interaction.guild.roles)
+                if role:
+                    if role in interaction.user.roles:
+                        await interaction.user.remove_roles(role)
+                        await interaction.response.send_message(f"Removed role **@{role.name}**", ephemeral=True)
+                    else:
+                        await interaction.user.add_roles(role)
+                        await interaction.response.send_message(f"Added role **@{role.name}**", ephemeral=True)
+                else:
+                    await interaction.response.send_message("Role not found.", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"You clicked: {custom_id}", ephemeral=True)
+        return callback
+
+
+class GameView(discord.ui.View):
+    def __init__(self, game_type: str, question: str, options: list[str]):
+        super().__init__(timeout=300)
+        self.game_type = game_type
+        self.question = question
+        self.options = options
+        self.scores: dict[str, int] = {}
+        for i, opt in enumerate(options[:5]):
+            emoji = ["🇦", "🇧", "🇨", "🇩", "🇪"][i]
+            btn = discord.ui.Button(label=opt[:80], style=discord.ButtonStyle.primary, emoji=emoji, custom_id=f"game_{i}")
+            btn.callback = self._make_callback(i, opt)
+            self.add_item(btn)
+
+    def _make_callback(self, idx: int, option: str):
+        async def callback(interaction: discord.Interaction) -> None:
+            uid = str(interaction.user.id)
+            if self.game_type == "trivia":
+                correct = idx == 0
+                if uid not in self.scores:
+                    self.scores[uid] = 0
+                if correct:
+                    self.scores[uid] += 1
+                    await interaction.response.send_message(f"✅ Correct! You have {self.scores[uid]} point(s).", ephemeral=True)
+                else:
+                    await interaction.response.send_message(f"❌ Wrong! The correct answer was: **{self.options[0]}**", ephemeral=True)
+            elif self.game_type == "would_you_rather":
+                await interaction.response.send_message(f"You chose: **{option}**", ephemeral=True)
+            elif self.game_type == "rock_paper_scissors":
+                import random
+                choices = ["rock", "paper", "scissors"]
+                bot_choice = random.choice(choices)
+                user_choice = option.lower()
+                if user_choice == bot_choice:
+                    result = "It's a tie!"
+                elif (user_choice == "rock" and bot_choice == "scissors") or \
+                     (user_choice == "paper" and bot_choice == "rock") or \
+                     (user_choice == "scissors" and bot_choice == "paper"):
+                    result = "You win!"
+                else:
+                    result = "You lose!"
+                await interaction.response.send_message(f"You chose **{option}**, I chose **{bot_choice}**. {result}", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"You selected: {option}", ephemeral=True)
+        return callback
+
+
+# ── Live changelog ─────────────────────────────────────────────────────────────
+
+CHANGELOG_FILE = Path(__file__).parent / "data" / "subagent_changelog.json"
+
+def _load_changelog() -> list[dict]:
+    if CHANGELOG_FILE.exists():
+        try:
+            return json.loads(CHANGELOG_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            return []
+    return []
+
+
+def _save_changelog(entries: list[dict]) -> None:
+    CHANGELOG_FILE.parent.mkdir(exist_ok=True)
+    if len(entries) > 200:
+        entries = entries[-200:]
+    CHANGELOG_FILE.write_text(json.dumps(entries, indent=2, ensure_ascii=False))
+
+
+def _add_changelog_entry(action: str, detail: str, status: str = "ok") -> None:
+    entries = _load_changelog()
+    entries.append({"ts": datetime.datetime.now().isoformat(timespec="seconds"), "action": action, "detail": detail[:300], "status": status})
+    _save_changelog(entries)
+
+
+# ── Cog ────────────────────────────────────────────────────────────────────────
+
+class Subagent(commands.Cog, name="Subagent"):
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+
+    @app_commands.command(name="subagent", description="Ask the AI to perform Discord actions (server owners only, 5/week)")
+    @app_commands.describe(prompt="What should the AI do? e.g. 'Create a channel for @youtuber role only to chat'")
+    async def subagent(self, interaction: discord.Interaction, prompt: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+        if not interaction.guild:
+            await interaction.followup.send("This command only works in a server.")
+            return
+        is_bot_owner = interaction.user.id == BOT_OWNER_ID
+        is_guild_owner = interaction.guild.owner_id == interaction.user.id
+        if not is_bot_owner and not is_guild_owner:
+            await interaction.followup.send("Only the server owner can use this command.", ephemeral=True)
+            return
+        if not is_bot_owner:
+            allowed, remaining, retry_after = check_subagent_rate_limit(
+                interaction.user.id, limit=SUBAGENT_RATE_LIMIT, window=SUBAGENT_RATE_WINDOW, owner_id=BOT_OWNER_ID,
+            )
+            if not allowed:
+                days = max(retry_after // 86400, 1)
+                await interaction.followup.send(f"You've used all {SUBAGENT_RATE_LIMIT} subagent actions for this week. Try again in ~{days} day(s).", ephemeral=True)
+                return
+        if not ai_providers.is_any_provider_available():
+            await interaction.followup.send("I'm not configured yet. Please try again later.")
+            return
+        guild = interaction.guild
+        edit_log: list[str] = []
+        status_embed = discord.Embed(title=f"🤖 {BOT_NAME} Subagent", color=BOT_COLOR)
+        status_embed.add_field(name="Request", value=prompt[:1024], inline=False)
+        status_embed.add_field(name="Status", value="⏳ Working on it...", inline=False)
+        status_embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+        status_msg = await interaction.followup.send(embed=status_embed, ephemeral=True)
+
+        async def _update_live_log() -> None:
+            embed = discord.Embed(title=f"🤖 {BOT_NAME} Subagent", color=BOT_COLOR)
+            embed.add_field(name="Request", value=prompt[:1024], inline=False)
+            if edit_log:
+                log_text = "\n".join(f"• {e}" for e in edit_log)
+                if len(log_text) > 1024:
+                    log_text = log_text[:1020] + "…"
+                embed.add_field(name=f"Edit Log ({len(edit_log)} actions)", value=log_text, inline=False)
+            embed.add_field(name="Status", value="⏳ Still working..." if not edit_log else f"⏳ Executing... ({len(edit_log)} actions done)", inline=False)
+            embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+            try:
+                await status_msg.edit(embed=embed)
+            except Exception:
+                pass
+
+        async def _confirm(prompt_text: str) -> bool:
+            view = ConfirmView(interaction.user.id, timeout=30)
+            await interaction.followup.send(prompt_text, view=view, ephemeral=True)
+            await view.wait()
+            return view.result is True
+
+        channels_info = []
+        for ch in guild.channels[:50]:
+            ch_type = type(ch).__name__.replace("Channel", "").lower()
+            perms_info = ""
+            if hasattr(ch, "overwrites") and ch.overwrites:
+                perm_roles = [r.name for r in ch.overwrites.keys() if hasattr(r, "name")]
+                if perm_roles:
+                    perms_info = f" [perms: {', '.join(perm_roles[:5])}]"
+            channels_info.append(f"  - #{ch.name} ({ch_type})" + (f" in '{ch.category.name}'" if ch.category else "") + perms_info)
+        roles_info = []
+        for r in guild.roles[:30]:
+            perms = []
+            if r.permissions.administrator:
+                perms.append("admin")
+            if r.permissions.manage_messages:
+                perms.append("manage_msgs")
+            if r.permissions.kick_members:
+                perms.append("kick")
+            if r.permissions.ban_members:
+                perms.append("ban")
+            perm_str = f" [{', '.join(perms)}]" if perms else ""
+            roles_info.append(f"  - @{r.name} (id:{r.id}, pos:{r.position}){perm_str}")
+        context = f"Current server: {guild.name}\nChannels:\n" + "\n".join(channels_info) + "\nRoles:\n" + "\n".join(roles_info)
+
+        async def _execute_function(name: str, args: dict) -> str:
+            try:
+                if name == "create_text_channel":
+                    existing = _find_similar_channel(guild, args["name"])
+                    if existing:
+                        entry = f"Reused existing channel #{existing.name} (similar to '{args['name']}')"
+                        edit_log.append(entry); _add_changelog_entry("create_text_channel", entry)
+                        await _update_live_log()
+                        return entry
+                    category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
+                    ch = await guild.create_text_channel(args["name"], category=category, topic=args.get("topic"))
+                    entry = f"Created text channel #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("create_text_channel", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "create_voice_channel":
+                    existing = _find_similar_channel(guild, args["name"])
+                    if existing:
+                        entry = f"Reused existing channel 🔊 {existing.name} (similar to '{args['name']}')"
+                        edit_log.append(entry); _add_changelog_entry("create_voice_channel", entry)
+                        await _update_live_log()
+                        return entry
+                    category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
+                    ch = await guild.create_voice_channel(args["name"], category=category, user_limit=args.get("user_limit", 0))
+                    entry = f"Created voice channel 🔊 {ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("create_voice_channel", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "create_category":
+                    existing = discord.utils.get(guild.categories, name=args["name"])
+                    if existing:
+                        entry = f"Reused existing category 📁 {existing.name}"
+                        edit_log.append(entry); _add_changelog_entry("create_category", entry)
+                        await _update_live_log()
+                        return entry
+                    cat = await guild.create_category(args["name"])
+                    entry = f"Created category 📁 {cat.name}"
+                    edit_log.append(entry); _add_changelog_entry("create_category", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "create_role":
+                    existing = _find_similar_role(guild, args["name"])
+                    if existing:
+                        entry = f"Reused existing role @{existing.name} (similar to '{args['name']}')"
+                        edit_log.append(entry); _add_changelog_entry("create_role", entry)
+                        await _update_live_log()
+                        return entry
+                    color = _hex_to_int(args.get("color", "#5865F2"))
+                    perm_str = args.get("permissions", "")
+                    if not perm_str:
+                        perm_str = _get_role_perms(args["name"])
+                    perm_bits = _parse_perms(perm_str)
+                    role = await guild.create_role(name=args["name"], color=discord.Color(color), hoist=args.get("hoist", False), mentionable=args.get("mentionable", False), permissions=discord.Permissions(perm_bits))
+                    entry = f"Created role @{role.name} with permissions: {perm_str}"
+                    edit_log.append(entry); _add_changelog_entry("create_role", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "set_channel_permissions":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch:
+                        return f"Channel '{args['channel_name']}' not found."
+                    role = _find_role(guild, args["role_name"])
+                    if not role:
+                        return f"Role '{args['role_name']}' not found."
+                    allow_bits = _parse_perms(args.get("allow", ""))
+                    deny_bits = _parse_perms(args.get("deny", ""))
+                    overwrite = discord.PermissionOverwrite.from_pair(allow=discord.Permissions(allow_bits), deny=discord.Permissions(deny_bits))
+                    await ch.set_permissions(role, overwrite=overwrite)
+                    entry = f"Set permissions for #{ch.name}: @{role.name} allow=[{args.get('allow','')}] deny=[{args.get('deny','')}]"
+                    edit_log.append(entry); _add_changelog_entry("set_channel_permissions", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "send_message":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch or not isinstance(ch, discord.TextChannel):
+                        return f"Channel '{args['channel_name']}' not found or not a text channel."
+                    content = _filter_content(args["content"])
+                    if content is None:
+                        return "Message blocked: content violates server rules."
+                    content = _safe_content(content)
+                    await ch.send(content[:2000])
+                    entry = f"Sent message in #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("send_message", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "send_embed":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch or not isinstance(ch, discord.TextChannel):
+                        return f"Channel '{args['channel_name']}' not found or not a text channel."
+                    title = args["title"]
+                    desc = args.get("description", "")
+                    if _filter_content(title) is None or _filter_content(desc) is None:
+                        return "Embed blocked: content violates server rules."
+                    embed = discord.Embed(title=title[:256], description=desc[:4096], color=discord.Color(_hex_to_int(args.get("color", "#5865F2"))))
+                    if args.get("footer"):
+                        embed.set_footer(text=args["footer"][:2048])
+                    if args.get("image_url"):
+                        embed.set_image(url=args["image_url"])
+                    if args.get("thumbnail_url"):
+                        embed.set_thumbnail(url=args["thumbnail_url"])
+                    if args.get("author_name"):
+                        embed.set_author(name=args["author_name"][:256], icon_url=args.get("author_icon_url", "") or None)
+                    for i in range(1, 4):
+                        fn = args.get(f"field{i}_name")
+                        fv = args.get(f"field{i}_value")
+                        if fn and fv:
+                            embed.add_field(name=fn[:256], value=fv[:1024], inline=args.get(f"field{i}_inline", False))
+                    if args.get("timestamp"):
+                        embed.timestamp = discord.utils.utcnow()
+                    await ch.send(embed=embed)
+                    entry = f"Sent embed '{args['title']}' in #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("send_embed", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "send_poll":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch or not isinstance(ch, discord.TextChannel):
+                        return f"Channel '{args['channel_name']}' not found."
+                    question = args["question"]
+                    options = args.get("options", [])
+                    if len(options) < 2 or len(options) > 5:
+                        return "Poll needs 2-5 options."
+                    duration = args.get("duration_minutes", 60)
+                    view = PollView(question, options, duration)
+                    embed = discord.Embed(title=f"📊 {question}", color=BOT_COLOR)
+                    for i, opt in enumerate(options):
+                        embed.add_field(name=f"{['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣'][i]} {opt}", value="0 votes (0%)", inline=False)
+                    embed.set_footer(text=f"Poll ends in {duration} minutes")
+                    msg = await ch.send(embed=embed, view=view)
+                    view.message = msg
+                    entry = f"Sent poll '{question}' in #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("send_poll", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "send_button_embed":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch or not isinstance(ch, discord.TextChannel):
+                        return f"Channel '{args['channel_name']}' not found."
+                    buttons = args.get("buttons", [])
+                    if not buttons or len(buttons) > 5:
+                        return "Need 1-5 buttons."
+                    view = ButtonEmbedView(buttons)
+                    embed = discord.Embed(title=args["title"][:256], description=args.get("description", "")[:4096], color=discord.Color(_hex_to_int(args.get("color", "#5865F2"))))
+                    embed.set_footer(text="Click a button below")
+                    await ch.send(embed=embed, view=view)
+                    entry = f"Sent button embed '{args['title']}' in #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("send_button_embed", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "send_game":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch or not isinstance(ch, discord.TextChannel):
+                        return f"Channel '{args['channel_name']}' not found."
+                    game_type = args.get("game_type", "trivia")
+                    question = args["question"]
+                    options = args.get("options", [])
+                    view = GameView(game_type, question, options)
+                    game_emoji = {"trivia": "🧠", "would_you_rather": "🤔", "rock_paper_scissors": "✂️"}.get(game_type, "🎮")
+                    embed = discord.Embed(title=f"{game_emoji} {question}", color=BOT_COLOR)
+                    embed.description = f"Game: {game_type.replace('_', ' ').title()}\nClick a button to play!"
+                    if game_type == "trivia" and options:
+                        for i, opt in enumerate(options):
+                            embed.add_field(name=f"{['🇦','🇧','🇨','🇩','🇪'][i]} {opt}", value="\u200b", inline=False)
+                    embed.set_footer(text="Click a button to play!")
+                    await ch.send(embed=embed, view=view)
+                    entry = f"Sent {game_type} game in #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("send_game", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "add_role_to_user":
+                    role = _find_role(guild, args["role_name"])
+                    if not role:
+                        return f"Role '{args['role_name']}' not found."
+                    member = await _find_member(guild, args["user"])
+                    if not member:
+                        return f"User '{args['user']}' not found."
+                    await member.add_roles(role)
+                    entry = f"Added role @{role.name} to {member.display_name}"
+                    edit_log.append(entry); _add_changelog_entry("add_role_to_user", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "remove_role_from_user":
+                    role = _find_role(guild, args["role_name"])
+                    if not role:
+                        return f"Role '{args['role_name']}' not found."
+                    member = await _find_member(guild, args["user"])
+                    if not member:
+                        return f"User '{args['user']}' not found."
+                    await member.remove_roles(role)
+                    entry = f"Removed role @{role.name} from {member.display_name}"
+                    edit_log.append(entry); _add_changelog_entry("remove_role_from_user", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "rename_channel":
+                    ch = _find_channel(guild, args["current_name"])
+                    if not ch:
+                        return f"Channel '{args['current_name']}' not found."
+                    old = ch.name
+                    await ch.edit(name=args["new_name"])
+                    entry = f"Renamed #{old} → #{args['new_name']}"
+                    edit_log.append(entry); _add_changelog_entry("rename_channel", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "set_slowmode":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch or not isinstance(ch, discord.TextChannel):
+                        return f"Channel '{args['channel_name']}' not found or not a text channel."
+                    await ch.edit(slowmode_delay=args["seconds"])
+                    entry = f"Set slowmode in #{ch.name} to {args['seconds']}s"
+                    edit_log.append(entry); _add_changelog_entry("set_slowmode", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "set_channel_topic":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch or not isinstance(ch, discord.TextChannel):
+                        return f"Channel '{args['channel_name']}' not found or not a text channel."
+                    await ch.edit(topic=args["topic"])
+                    entry = f"Set topic of #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("set_channel_topic", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "delete_channel":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch:
+                        return f"Channel '{args['channel_name']}' not found."
+                    chname = ch.name
+                    if not await _confirm(f"Delete channel #{chname}?"):
+                        return f"Cancelled deletion of #{chname}."
+                    await ch.delete()
+                    entry = f"Deleted channel #{chname}"
+                    edit_log.append(entry); _add_changelog_entry("delete_channel", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "create_scheduled_event":
+                    start_dt = _parse_iso_dt(args["start_time"])
+                    if not start_dt:
+                        return f"Invalid start_time: {args['start_time']}"
+                    if start_dt.tzinfo is None:
+                        start_dt = start_dt.replace(tzinfo=datetime.timezone.utc)
+                    end_dt = _parse_iso_dt(args.get("end_time", ""))
+                    if end_dt and end_dt.tzinfo is None:
+                        end_dt = end_dt.replace(tzinfo=datetime.timezone.utc)
+                    kwargs: dict = {"name": args["name"], "description": args.get("description", ""), "start_time": start_dt}
+                    if end_dt:
+                        kwargs["end_time"] = end_dt
+                    ch = _find_channel(guild, args["channel_name"]) if args.get("channel_name") else None
+                    if ch and isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+                        kwargs["entity_type"] = discord.EntityType.voice
+                        kwargs["channel"] = ch
+                    elif args.get("location"):
+                        kwargs["entity_type"] = discord.EntityType.external
+                        kwargs["location"] = args["location"]
+                    else:
+                        kwargs["entity_type"] = discord.EntityType.external
+                        kwargs["location"] = args.get("location", "Online")
+                    event = await guild.create_scheduled_event(**kwargs)
+                    entry = f"Created event '{event.name}' starting {start_dt.isoformat()}"
+                    edit_log.append(entry); _add_changelog_entry("create_scheduled_event", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "edit_scheduled_event":
+                    event = discord.utils.find(lambda e: e.name.lower() == args["event_name"].lower(), guild.scheduled_events)
+                    if not event:
+                        return f"Event '{args['event_name']}' not found."
+                    edit_kwargs: dict = {}
+                    if args.get("new_name"):
+                        edit_kwargs["name"] = args["new_name"]
+                    if args.get("new_description"):
+                        edit_kwargs["description"] = args["new_description"]
+                    new_start = _parse_iso_dt(args.get("new_start_time", ""))
+                    if new_start:
+                        if new_start.tzinfo is None:
+                            new_start = new_start.replace(tzinfo=datetime.timezone.utc)
+                        edit_kwargs["start_time"] = new_start
+                    if edit_kwargs:
+                        await event.edit(**edit_kwargs)
+                    entry = f"Edited event '{args['event_name']}'"
+                    edit_log.append(entry); _add_changelog_entry("edit_scheduled_event", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "delete_scheduled_event":
+                    event = discord.utils.find(lambda e: e.name.lower() == args["event_name"].lower(), guild.scheduled_events)
+                    if not event:
+                        return f"Event '{args['event_name']}' not found."
+                    if not await _confirm(f"Delete event '{event.name}'?"):
+                        return f"Cancelled deletion of event '{event.name}'."
+                    await event.delete()
+                    entry = f"Deleted event '{args['event_name']}'"
+                    edit_log.append(entry); _add_changelog_entry("delete_scheduled_event", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "create_forum_channel":
+                    existing = _find_similar_channel(guild, args["name"])
+                    if existing:
+                        entry = f"Reused existing channel #{existing.name} (similar to '{args['name']}')"
+                        edit_log.append(entry); _add_changelog_entry("create_forum_channel", entry)
+                        await _update_live_log()
+                        return entry
+                    category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
+                    ch = await guild.create_forum_channel(args["name"], category=category, topic=args.get("topic"))
+                    entry = f"Created forum channel #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("create_forum_channel", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "create_announcement_channel":
+                    existing = _find_similar_channel(guild, args["name"])
+                    if existing:
+                        entry = f"Reused existing channel #{existing.name} (similar to '{args['name']}')"
+                        edit_log.append(entry); _add_changelog_entry("create_announcement_channel", entry)
+                        await _update_live_log()
+                        return entry
+                    category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
+                    ch = await guild.create_text_channel(args["name"], category=category, topic=args.get("topic"), news=True)
+                    entry = f"Created announcement channel #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("create_announcement_channel", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "create_stage_channel":
+                    existing = _find_similar_channel(guild, args["name"])
+                    if existing:
+                        entry = f"Reused existing channel 🔭 {existing.name} (similar to '{args['name']}')"
+                        edit_log.append(entry); _add_changelog_entry("create_stage_channel", entry)
+                        await _update_live_log()
+                        return entry
+                    category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
+                    ch = await guild.create_stage_channel(args["name"], category=category)
+                    entry = f"Created stage channel {ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("create_stage_channel", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "create_invite":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch or not isinstance(ch, (discord.TextChannel, discord.VoiceChannel, discord.StageChannel)):
+                        return f"Channel '{args['channel_name']}' not found."
+                    invite = await ch.create_invite(max_age=args.get("max_age", 0), max_uses=args.get("max_uses", 0))
+                    entry = f"Created invite {invite.url} for #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("create_invite", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "kick_member":
+                    member = await _find_member(guild, args["user"])
+                    if not member:
+                        return f"User '{args['user']}' not found."
+                    if member.id == BOT_OWNER_ID or member.id == guild.owner_id:
+                        return "Cannot kick the server owner or bot owner."
+                    if guild.me.top_role <= member.top_role:
+                        return "Cannot kick a member with equal or higher role."
+                    await member.kick(reason=args.get("reason", "Subagent action"))
+                    entry = f"Kicked {member.display_name}"
+                    edit_log.append(entry); _add_changelog_entry("kick_member", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "ban_member":
+                    member = await _find_member(guild, args["user"])
+                    if not member:
+                        uid = int(args["user"]) if args["user"].isdigit() else None
+                        if uid:
+                            if uid == BOT_OWNER_ID or uid == guild.owner_id:
+                                return "Cannot ban the server owner or bot owner."
+                            await guild.ban(discord.Object(id=uid), reason=args.get("reason", "Subagent action"))
+                            entry = f"Banned user ID {uid}"
+                            edit_log.append(entry); _add_changelog_entry("ban_member", entry)
+                            await _update_live_log()
+                            return entry
+                        return f"User '{args['user']}' not found."
+                    if member.id == BOT_OWNER_ID or member.id == guild.owner_id:
+                        return "Cannot ban the server owner or bot owner."
+                    if guild.me.top_role <= member.top_role:
+                        return "Cannot ban a member with equal or higher role."
+                    await member.ban(reason=args.get("reason", "Subagent action"), delete_message_days=0)
+                    entry = f"Banned {member.display_name}"
+                    edit_log.append(entry); _add_changelog_entry("ban_member", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "timeout_member":
+                    member = await _find_member(guild, args["user"])
+                    if not member:
+                        return f"User '{args['user']}' not found."
+                    if member.id == BOT_OWNER_ID or member.id == guild.owner_id:
+                        return "Cannot timeout the server owner or bot owner."
+                    if guild.me.top_role <= member.top_role:
+                        return "Cannot timeout a member with equal or higher role."
+                    until = discord.utils.utcnow() + datetime.timedelta(minutes=args["minutes"])
+                    await member.timeout(until, reason=args.get("reason", "Subagent action"))
+                    entry = f"Timed out {member.display_name} for {args['minutes']}m"
+                    edit_log.append(entry); _add_changelog_entry("timeout_member", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "send_dm":
+                    member = await _find_member(guild, args["user"])
+                    if not member:
+                        return f"User '{args['user']}' not found."
+                    content = _filter_content(args["content"])
+                    if content is None:
+                        return "DM blocked: content violates server rules."
+                    content = _safe_content(content)
+                    dm = await member.create_dm()
+                    await dm.send(content[:2000])
+                    entry = f"Sent DM to {member.display_name}"
+                    edit_log.append(entry); _add_changelog_entry("send_dm", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "edit_role":
+                    role = _find_role(guild, args["role_name"])
+                    if not role:
+                        return f"Role '{args['role_name']}' not found."
+                    edit_kwargs: dict = {}
+                    if args.get("new_name"):
+                        edit_kwargs["name"] = args["new_name"]
+                    if args.get("color"):
+                        edit_kwargs["color"] = discord.Color(_hex_to_int(args["color"]))
+                    if args.get("permissions"):
+                        edit_kwargs["permissions"] = discord.Permissions(_parse_perms(args["permissions"]))
+                    if "hoist" in args:
+                        edit_kwargs["hoist"] = args["hoist"]
+                    if "mentionable" in args:
+                        edit_kwargs["mentionable"] = args["mentionable"]
+                    if edit_kwargs:
+                        await role.edit(**edit_kwargs)
+                    entry = f"Edited role @{role.name}"
+                    edit_log.append(entry); _add_changelog_entry("edit_role", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "delete_role":
+                    role = _find_role(guild, args["role_name"])
+                    if not role:
+                        return f"Role '{args['role_name']}' not found."
+                    rname = role.name
+                    if not await _confirm(f"Delete role @{rname}?"):
+                        return f"Cancelled deletion of role @{rname}."
+                    await role.delete()
+                    entry = f"Deleted role @{rname}"
+                    edit_log.append(entry); _add_changelog_entry("delete_role", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "reorder_channel":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch:
+                        return f"Channel '{args['channel_name']}' not found."
+                    edit_kwargs: dict = {}
+                    if args.get("category"):
+                        cat = discord.utils.get(guild.categories, name=args["category"])
+                        if cat:
+                            edit_kwargs["category"] = cat
+                    if "position" in args:
+                        edit_kwargs["position"] = args["position"]
+                    if edit_kwargs:
+                        await ch.edit(**edit_kwargs)
+                    entry = f"Reordered #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("reorder_channel", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "read_logs":
+                    count = args.get("count", 10)
+                    level = args.get("level", "")
+                    logs = _read_recent_logs(count, level)
+                    entry = f"Read {count} log entries"
+                    edit_log.append(entry); _add_changelog_entry("read_logs", entry)
+                    await _update_live_log()
+                    return logs[:1500]
+                if name == "edit_bot_message":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch or not isinstance(ch, discord.TextChannel):
+                        return f"Channel '{args['channel_name']}' not found."
+                    try:
+                        msg = await ch.fetch_message(int(args["message_id"]))
+                    except (discord.NotFound, ValueError):
+                        return f"Message {args['message_id']} not found in #{ch.name}."
+                    if msg.author.id != self.bot.user.id:
+                        return "I can only edit my own messages."
+                    content = _filter_content(args["new_content"])
+                    if content is None:
+                        return "Edit blocked: content violates server rules."
+                    content = _safe_content(content)
+                    await msg.edit(content=content[:2000])
+                    entry = f"Edited message {args['message_id']} in #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("edit_bot_message", entry)
+                    await _update_live_log()
+                    return entry
+                if name == "send_gif":
+                    ch = _find_channel(guild, args["channel_name"])
+                    if not ch or not isinstance(ch, (discord.TextChannel, discord.Thread)):
+                        return f"Channel '{args['channel_name']}' not found."
+                    gif_url = await _search_gif(args["query"])
+                    if not gif_url:
+                        return f"No GIF found for '{args['query']}'."
+                    embed = discord.Embed(title=f"🎬 {args['query']}", color=BOT_COLOR)
+                    embed.set_image(url=gif_url)
+                    await ch.send(embed=embed)
+                    entry = f"Sent GIF '{args['query']}' to #{ch.name}"
+                    edit_log.append(entry); _add_changelog_entry("send_gif", entry)
+                    await _update_live_log()
+                    return entry
+                return f"Unknown function: {name}"
+            except discord.Forbidden:
+                msg = f"Missing permissions for: {name}"
+                edit_log.append(f"[FAILED] {msg}")
+                _add_changelog_entry(name, msg, "failed")
+                await _update_live_log()
+                return msg
+            except Exception:
+                msg = f"Error in {name}"
+                edit_log.append(f"[FAILED] {msg}")
+                _add_changelog_entry(name, msg, "failed")
+                log.exception("Subagent function error: %s", name)
+                await _update_live_log()
+                return msg
+
+        try:
+            final_text = ""
+            use_gemini = ai_providers.is_gemini_available() and genai_types is not None
+            full_system = f"{SUBAGENT_SYSTEM}\n\n## CURRENT SERVER STATE\n{context}"
+            if use_gemini:
+                contents = [genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=prompt)])]
+                tools = _build_tools()
+                for _ in range(MAX_ROUNDS):
+                    response = await ai_providers.gemini_function_call(full_system, contents, tools)
+                    if response is None:
+                        use_gemini = False
+                        break
+                    if not response.function_calls:
+                        final_text = response.text or "Done."
+                        break
+                    fc_parts = []
+                    for fc in response.function_calls:
+                        fn_name = fc.name
+                        fn_args = dict(fc.args) if fc.args else {}
+                        result = await _execute_function(fn_name, fn_args)
+                        fc_parts.append(genai_types.Part.from_function_response(name=fn_name, response={"result": result}))
+                        contents.append(genai_types.Content(role="model", parts=[genai_types.Part.from_function_call(name=fn_name, args=fn_args)]))
+                    contents.append(genai_types.Content(role="user", parts=fc_parts))
+                else:
+                    final_text = "Reached max function-call rounds."
+            if not use_gemini:
+                tools_json = _build_tools_json()
+                chat_messages: list[dict] = [{"role": "user", "content": prompt}]
+                for round_num in range(MAX_ROUNDS):
+                    result = await ai_providers.openai_function_call(full_system, chat_messages, tools_json)
+                    if result is None:
+                        result = await ai_providers.text_function_call(full_system, chat_messages, tools_json)
+                        if result is None:
+                            final_text = "I had trouble processing that request. Please try again."
+                            break
+                    tool_calls = result.get("tool_calls")
+                    if not tool_calls:
+                        final_text = result.get("content") or "Done."
+                        break
+                    for idx, tc in enumerate(tool_calls):
+                        call_id = f"call_{round_num}_{idx}"
+                        fn_name = tc["name"]
+                        fn_args = tc["arguments"]
+                        exec_result = await _execute_function(fn_name, fn_args)
+                        chat_messages.append({"role": "assistant", "content": None, "tool_calls": [{"id": call_id, "type": "function", "function": {"name": fn_name, "arguments": json.dumps(fn_args)}}]})
+                        chat_messages.append({"role": "tool", "tool_call_id": call_id, "content": exec_result})
+                else:
+                    final_text = "Reached max function-call rounds."
+        except Exception:
+            log.exception("Subagent error")
+            final_text = "I had trouble with that request. Please try again."
+        final_text = sanitize_ai_output(final_text, user_message=prompt)
+        embed = discord.Embed(title=f"🤖 {BOT_NAME} Subagent", color=COLOR_OK if edit_log else BOT_COLOR)
+        embed.add_field(name="Request", value=prompt[:1024], inline=False)
+        if final_text:
+            embed.add_field(name="Summary", value=final_text[:1024], inline=False)
+        if edit_log:
+            log_text = "\n".join(f"• {e}" for e in edit_log)
+            if len(log_text) > 1024:
+                log_text = log_text[:1020] + "…"
+            embed.add_field(name=f"Edit Log ({len(edit_log)} actions)", value=log_text, inline=False)
+        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+        try:
+            await status_msg.edit(embed=embed)
+        except Exception:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        if edit_log:
+            log_lines = "\n".join(f"• {e}" for e in edit_log)
+            await log_action(self.bot, "🤖 Subagent Actions", f"**Owner:** {interaction.user.mention}\n**Request:** {prompt[:200]}\n\n**Edit Log:**\n{log_lines[:1500]}", color=COLOR_OK)
+
+    @app_commands.command(name="changelog", description="View the live subagent changelog.")
+    async def changelog_cmd(self, interaction: discord.Interaction) -> None:
+        entries = _load_changelog()
+        if not entries:
+            await interaction.response.send_message("No changelog entries yet.", ephemeral=True)
+            return
+        embed = discord.Embed(title="📋 Subagent Changelog", description=f"Last {min(len(entries), 25)} of {len(entries)} actions", color=BOT_COLOR)
+        for e in entries[-25:]:
+            icon = "✅" if e["status"] == "ok" else "❌"
+            embed.add_field(name=f"{icon} {e['action']} — {e['ts']}", value=e["detail"][:200], inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(Subagent(bot))
