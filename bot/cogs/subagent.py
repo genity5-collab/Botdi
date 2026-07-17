@@ -591,7 +591,7 @@ class Subagent(commands.Cog, name="Subagent"):
                     category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
                     ch = await guild.create_stage_channel(args["name"], category=category)
                     entry = f"Created stage channel {ch.name}"
-                    edit_log.append(entry); _ntry("create_stage_channel", entry)
+                    edit_log.append(entry); _add_changelog_entry("create_stage_channel", entry)
                     return entry
 
                 if name == "set_channel_topic":
