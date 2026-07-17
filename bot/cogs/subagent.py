@@ -1,16 +1,17 @@
 """
-Subagent Cog — bot-owner-only /subagent slash command.
+Subagent Cog — /subagent slash command.
 
-Uses multi-provider AI (Gemini function-calling with fallback to
-Groq/OpenRouter/HuggingFace/Cerebras text-based calling) to let the
-bot owner describe Discord actions in natural language.
+Uses multi-provider AI with function calling to let users describe
+Discord actions in natural language. The AI decides which functions
+to call — create channels, roles, events, embeds, send messages,
+and more — the bot executes them.
 
-The AI decides which functions to call — create channels, roles, events,
-embeds, send messages, and more — the bot executes them, and a live
-edit log is sent to LOG_CHANNEL_ID after each action.
+Permissions:
+  - Bot owner: infinite usage
+  - Guild owner (server owner): 5 uses per week
+  - Administrators: NOT allowed (only the server owner, not admins)
 
-API errors are never shown to the user — if all providers fail, a generic
-message is returned instead.
+API errors are never shown to the user.
 """
 
 from __future__ import annotations
@@ -26,8 +27,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import LOG_CHANNEL_ID, BOT_COLOR, COLOR_OK, COLOR_ERR, BOT_OWNER_ID, BOT_NAME
-from utils import log_action
+from config import (
+    LOG_CHANNEL_ID, BOT_COLOR, COLOR_OK, COLOR_ERR, BOT_OWNER_ID, BOT_NAME,
+    SUBAGENT_RATE_LIMIT, SUBAGENT_RATE_WINDOW,
+)
+from data_store import check_subagent_rate_limit
+from utils import log_action, sanitize_ai_output
 import ai_providers
 
 log = logging.getLogger("vyrion.subagent")
@@ -37,7 +42,7 @@ genai_types = ai_providers.get_genai_types()
 
 SUBAGENT_SYSTEM = (
     f"You are {BOT_NAME} Subagent, an AI assistant that manages Discord servers by calling functions. "
-    "You receive instructions from the bot owner and you MUST call the appropriate function(s) to execute them. "
+    "You receive instructions from the server owner and you MUST call the appropriate function(s) to execute them. "
     "NEVER just describe what you would do — ALWAYS actually call the functions. "
     "You have functions to: create text/voice/forum/announcement/stage channels, create categories, "
     "create roles, send messages, send embeds, add/remove roles from users, rename channels, set slowmode, "
@@ -347,7 +352,7 @@ class Subagent(commands.Cog, name="Subagent"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="subagent", description="Bot owner: Ask the AI to perform Discord actions")
+    @app_commands.command(name="subagent", description="Ask the AI to perform Discord actions (server owners only, 5/week)")
     @app_commands.describe(prompt="What should the AI do? e.g. 'Create a channel called test and send Hello in it'")
     async def subagent(self, interaction: discord.Interaction, prompt: str) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -356,13 +361,33 @@ class Subagent(commands.Cog, name="Subagent"):
             await interaction.followup.send("This command only works in a server.")
             return
 
-        # Owner-only check
-        if BOT_OWNER_ID and interaction.user.id != BOT_OWNER_ID:
-            await interaction.followup.send("Only the bot owner can use this command.", ephemeral=True)
+        # Permission check: bot owner OR guild owner (NOT admins)
+        is_bot_owner = interaction.user.id == BOT_OWNER_ID
+        is_guild_owner = interaction.guild.owner_id == interaction.user.id
+
+        if not is_bot_owner and not is_guild_owner:
+            await interaction.followup.send(
+                "Only the server owner can use this command.",
+                ephemeral=True,
+            )
             return
-        if not BOT_OWNER_ID and not interaction.user.guild_permissions.administrator:
-            await interaction.followup.send("Bot owner ID not configured. Administrators may use this temporarily.", ephemeral=True)
-            return
+
+        # Rate limiting: guild owners get 5/week, bot owner infinite
+        if not is_bot_owner:
+            allowed, remaining, retry_after = check_subagent_rate_limit(
+                interaction.user.id,
+                limit=SUBAGENT_RATE_LIMIT,
+                window=SUBAGENT_RATE_WINDOW,
+                owner_id=BOT_OWNER_ID,
+            )
+            if not allowed:
+                days = max(retry_after // 86400, 1)
+                await interaction.followup.send(
+                    f"You've used all {SUBAGENT_RATE_LIMIT} subagent actions for this week. "
+                    f"Try again in ~{days} day(s).",
+                    ephemeral=True,
+                )
+                return
 
         if not ai_providers.is_any_provider_available():
             await interaction.followup.send("I'm not configured yet. Please try again later.")
@@ -566,7 +591,7 @@ class Subagent(commands.Cog, name="Subagent"):
                     category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
                     ch = await guild.create_stage_channel(args["name"], category=category)
                     entry = f"Created stage channel {ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("create_stage_channel", entry)
+                    edit_log.append(entry); _ntry("create_stage_channel", entry)
                     return entry
 
                 if name == "set_channel_topic":
@@ -651,7 +676,6 @@ class Subagent(commands.Cog, name="Subagent"):
             use_gemini = ai_providers.is_gemini_available() and genai_types is not None
 
             if use_gemini:
-                # ── Gemini function-calling path ────────────────────────────────
                 contents = [
                     genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=prompt)]),
                 ]
@@ -662,7 +686,6 @@ class Subagent(commands.Cog, name="Subagent"):
                         SUBAGENT_SYSTEM, contents, tools,
                     )
                     if response is None:
-                        # Fall back to OpenAI-compatible path
                         use_gemini = False
                         break
 
@@ -687,7 +710,6 @@ class Subagent(commands.Cog, name="Subagent"):
                     final_text = "Reached max function-call rounds. Actions may still have been executed."
 
             if not use_gemini:
-                # ── OpenAI-compatible function-calling path (Groq/OpenRouter/Cerebras) ──
                 tools_json = _build_tools_json()
                 chat_messages: list[dict] = [{"role": "user", "content": prompt}]
 
@@ -696,7 +718,6 @@ class Subagent(commands.Cog, name="Subagent"):
                         SUBAGENT_SYSTEM, chat_messages, tools_json,
                     )
                     if result is None:
-                        # Last resort: text-based function calling (works with any model)
                         result = await ai_providers.text_function_call(
                             SUBAGENT_SYSTEM, chat_messages, tools_json,
                         )
@@ -709,7 +730,6 @@ class Subagent(commands.Cog, name="Subagent"):
                         final_text = result.get("content") or "Done."
                         break
 
-                    # Execute each tool call
                     for idx, tc in enumerate(tool_calls):
                         call_id = f"call_{round_num}_{idx}"
                         fn_name = tc["name"]
@@ -724,8 +744,6 @@ class Subagent(commands.Cog, name="Subagent"):
             log.exception("Subagent error")
             final_text = "I had trouble with that request. Please try again."
 
-        # Sanitize final_text to remove any API error messages
-        from utils import sanitize_ai_output
         final_text = sanitize_ai_output(final_text, user_message=prompt)
 
         embed = discord.Embed(
