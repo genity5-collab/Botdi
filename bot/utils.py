@@ -1,5 +1,5 @@
 """
-Shared utilities: action logging, appeal embeds, PII / TOS filter, profanity guard.
+Shared utilities: action logging, appeal embeds, PII / TOS filter, profanity guard, enforced rules.
 """
 
 from __future__ import annotations
@@ -90,7 +90,6 @@ _PING_RE = re.compile(
 
 
 def sanitize_ai_output(text: str, *, user_message: str = "") -> str:
-    """Remove pings, API error leaks, censor profanity, and block copying."""
     text = _PING_RE.sub("", text)
     text = _OUTPUT_PROFANITY.sub("***", text)
     for pattern in (
@@ -109,7 +108,6 @@ def sanitize_ai_output(text: str, *, user_message: str = "") -> str:
 
 
 def _is_copying(ai_text: str, user_text: str) -> bool:
-    """Check if AI output is too similar to the user's message (anti-copy)."""
     ai_lower = ai_text.lower().strip()
     user_lower = user_text.lower().strip()
     if not user_lower or not ai_lower:
@@ -130,7 +128,6 @@ def count_words(text: str) -> int:
 
 
 def enforce_word_limit(text: str, *, is_code: bool = False, normal_limit: int = 40, code_limit: int = 100) -> str:
-    """Truncate text to word limit. Code responses get a higher limit."""
     has_line_breaks = text.count("\n") >= 4
     has_rhyme_pattern = bool(re.search(r"(\w+)\s*\n.*\1\s*$", text, re.MULTILINE))
     if has_line_breaks and has_rhyme_pattern:
@@ -144,6 +141,18 @@ def enforce_word_limit(text: str, *, is_code: bool = False, normal_limit: int = 
     if last_period > limit * 0.7:
         truncated = truncated[:last_period + 1]
     return truncated + "…"
+
+
+# ── Enforced rules ─────────────────────────────────────────────────────────────
+
+def append_enforced_rules(text: str, rules_text: str) -> str:
+    """Programmatically append enforced rules to every AI response."""
+    if not rules_text or not rules_text.strip():
+        return text
+    suffix = f"\n\n📋 **Enforced Rules:**\n{rules_text}"
+    if len(text) + len(suffix) > 1900:
+        text = text[:1900 - len(suffix)]
+    return text + suffix
 
 
 # ── Appeal embed ──────────────────────────────────────────────────────────────
