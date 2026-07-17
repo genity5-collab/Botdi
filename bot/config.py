@@ -31,7 +31,7 @@ COLOR_WARN = 0xF0B132
 COLOR_ERR  = 0xED4245
 COLOR_INFO = 0x5865F2
 
-# ── AI — Gemini (vision-capable) ─────────────────────────────────────────────
+# ── AI — Gemini (vision-capable) ────────────────────────────────────────────
 GEMINI_MODEL = "gemini-2.0-flash"
 GEMINI_FALLBACK_MODELS = [
     "gemini-1.5-pro",
@@ -42,9 +42,9 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# ── Rate limiting ────────────────────────────────────────────────────────────
+# ── Rate limiting ─────────────────────────────────────────────────────────────
 # Subagent: 5 per week for guild owners, bot owner infinite
-n# Server: 5 messages per hour for everyone, owner infinite
+# Server: 5 messages per hour for everyone, owner infinite
 # DM: 15 messages per 3-day cycle, degrading: day1=15, day2=10, day3=5, then 0
 SUBAGENT_RATE_LIMIT    = 5
 SUBAGENT_RATE_WINDOW   = 7 * 24 * 3600  # 1 week
@@ -55,7 +55,7 @@ DM_DAY1_LIMIT          = 15
 DM_DAY2_LIMIT          = 10
 DM_DAY3_LIMIT          = 5
 
-# ── AI model registry ─────────────────────────────────────────────────────────
+# ── AI model registry ──────────────────────────────────────────────────────────
 GROQ_TOOL_MODELS = [
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "meta-llama/llama-4-maverick-17b-128e-instruct",
@@ -162,4 +162,4 @@ STRIKE_TIMEOUT_SECONDS  = 86_400
 AUTOMOD_TIMEOUT_SECONDS = 3_600
 FILTER_COOLDOWN_SECONDS = 15
 
-BLACKLISTED_WORDS: list[str] = []
+BLACKLISTED_WORDS : list[str] = []
