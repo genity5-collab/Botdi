@@ -2,14 +2,14 @@
 Multi-provider AI fallback layer.
 
 Tries providers in order until one succeeds:
-  1. Gemini (google-genai, vision-capable)
-  2. Groq (OpenAI-compatible REST, 12 models)
-  3. OpenRouter (OpenAI-compatible REST, 24 free models)
-  4. Hugging Face (Inference API REST, 10 models)
-  5. Cerebras (OpenAI-compatible REST, 2 models)
+  1. Gemini (google-genai, vision-capable, native function calling)
+  2. Groq (OpenAI-compatible REST, native tool calling on select models)
+  3. OpenRouter (OpenAI-compatible REST, native tool calling on select models)
+  4. Hugging Face (Inference API REST, text-based calling)
+  5. Cerebras (OpenAI-compatible REST, native tool calling)
 
-Each provider is optional — only configured keys are tried.
-Total: 30+ fallback models across all providers.
+For function calling (subagent), only models known to support native tool calling
+are tried first. If all fail, text-based function calling is used as fallback.
 """
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def _get_gemini():
         return None, None
 
 
-# ── OpenAI-compatible REST helpers (Groq, OpenRouter, Cerebras) ────────────────
+# ── OpenAI-compatible REST helpers ────────────────────────────────────────────
 
 async def _openai_compat_chat(
     url: str,
@@ -71,7 +71,6 @@ async def _openai_compat_chat(
     max_tokens: int = 200,
     timeout: int = 30,
 ) -> str:
-    """Call an OpenAI-compatible /chat/completions endpoint."""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -212,12 +211,7 @@ async def generate(
     max_tokens: int = 200,
     image_parts: list[tuple[bytes, str]] | None = None,
 ) -> str:
-    """
-    Generate a text reply using the first provider that succeeds.
-    Providers are tried in order: Gemini → Groq → OpenRouter → HuggingFace → Cerebras.
-    Each provider tries all its configured models before moving to the next.
-    """
-    # 1. Gemini (with fallback models)
+    """Generate text using the first provider/model that succeeds."""
     if GEMINI_API_KEY:
         text = await _gemini_generate(
             system_prompt, messages,
@@ -229,7 +223,6 @@ async def generate(
 
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
 
-    # 2. Groq (try all configured models)
     if GROQ_API_KEY:
         active_groq = getattr(config, "ACTIVE_GROQ_MODEL", config.GROQ_MODELS[0])
         groq_models = [active_groq] + [m for m in config.GROQ_MODELS if m != active_groq]
@@ -241,7 +234,6 @@ async def generate(
             if text:
                 return text
 
-    # 3. OpenRouter (try all free models)
     if OPENROUTER_API_KEY:
         active_or = getattr(config, "ACTIVE_OPENROUTER_MODEL", config.OPENROUTER_MODELS[0])
         or_models = [active_or] + [m for m in config.OPENROUTER_MODELS if m != active_or]
@@ -253,7 +245,6 @@ async def generate(
             if text:
                 return text
 
-    # 4. HuggingFace (try all models)
     if HUGGINGFACE_API_KEY:
         active_hf = getattr(config, "ACTIVE_HF_MODEL", config.HUGGINGFACE_MODELS[0])
         hf_models = [active_hf] + [m for m in config.HUGGINGFACE_MODELS if m != active_hf]
@@ -265,7 +256,6 @@ async def generate(
             if text:
                 return text
 
-    # 5. Cerebras (try all models)
     if CEREBRAS_API_KEY:
         active_cb = getattr(config, "ACTIVE_CEREBRAS_MODEL", config.CEREBRAS_MODELS[0])
         cb_models = [active_cb] + [m for m in config.CEREBRAS_MODELS if m != active_cb]
@@ -292,16 +282,23 @@ async def gemini_function_call(
     if client is None or gt is None:
         return None
     active_model = getattr(config, "ACTIVE_GEMINI_MODEL", GEMINI_MODEL)
-    config_obj = gt.GenerateContentConfig(
-        system_instruction=system_prompt,
-        tools=tools,
-    )
-    return await asyncio.to_thread(
-        client.models.generate_content,
-        model=active_model,
-        contents=contents,
-        config=config_obj,
-    )
+    models_to_try = [active_model, *GEMINI_FALLBACK_MODELS]
+    for model_id in models_to_try:
+        try:
+            config_obj = gt.GenerateContentConfig(
+                system_instruction=system_prompt,
+                tools=tools,
+            )
+            resp = await asyncio.to_thread(
+                client.models.generate_content,
+                model=model_id,
+                contents=contents,
+                config=config_obj,
+            )
+            return resp
+        except Exception:
+            continue
+    return None
 
 
 def get_genai_types():
@@ -315,7 +312,7 @@ def is_gemini_available() -> bool:
     return c is not None
 
 
-# ── OpenAI-compatible function calling (Groq, OpenRouter, Cerebras) ────────────
+# ── OpenAI-compatible function calling (only tool-capable models) ──────────────
 
 async def openai_function_call(
     system_prompt: str,
@@ -323,25 +320,25 @@ async def openai_function_call(
     tools_json: list[dict],
     *,
     temperature: float = 0.7,
-    max_tokens: int = 200,
+    max_tokens: int = 800,
 ) -> dict | None:
     """
-    Call an OpenAI-compatible /chat/completions endpoint with tool calling.
-    Tries Groq → OpenRouter → Cerebras (whichever keys are configured).
+    Call an OpenAI-compatible endpoint with native tool calling.
+    Only uses models known to support function calling (GROQ_TOOL_MODELS, etc).
+    Returns {"tool_calls": [...], "content": ""} or {"tool_calls": None, "content": "..."} or None.
     """
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
     openai_tools = [{"type": "function", "function": t} for t in tools_json]
 
     providers = []
     if GROQ_API_KEY:
-        active_groq = getattr(config, "ACTIVE_GROQ_MODEL", config.GROQ_MODELS[0])
-        for m in config.GROQ_MODELS:
+        for m in config.GROQ_TOOL_MODELS:
             providers.append((GROQ_URL, GROQ_API_KEY, m))
     if OPENROUTER_API_KEY:
-        for m in config.OPENROUTER_MODELS:
+        for m in config.OPENROUTER_TOOL_MODELS:
             providers.append((OPENROUTER_URL, OPENROUTER_API_KEY, m))
     if CEREBRAS_API_KEY:
-        for m in config.CEREBRAS_MODELS:
+        for m in config.CEREBRAS_TOOL_MODELS:
             providers.append((CEREBRAS_URL, CEREBRAS_API_KEY, m))
 
     for url, key, model in providers:
@@ -361,7 +358,7 @@ async def openai_function_call(
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     url, headers=headers, json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30),
+                    timeout=aiohttp.ClientTimeout(total=45),
                 ) as resp:
                     if resp.status != 200:
                         continue
@@ -399,11 +396,12 @@ async def text_function_call(
     tools_json: list[dict],
     *,
     temperature: float = 0.7,
-    max_tokens: int = 200,
+    max_tokens: int = 800,
 ) -> dict | None:
     """
     Text-based function calling fallback for models without native tool calling.
     Injects tool schemas into the system prompt and parses JSON from the response.
+    Tries Gemini first, then all other providers.
     """
     tool_descriptions = "\n".join(
         f"- {t['name']}: {t['description']}\n  params: {json.dumps(t['parameters'])}"
@@ -424,8 +422,15 @@ async def text_function_call(
     rest_messages = [{"role": "system", "content": injected_system}] + messages
 
     text = ""
-    # Try all providers with text-based calling
-    if GROQ_API_KEY:
+
+    # Try Gemini first (it's best at following JSON instructions)
+    if GEMINI_API_KEY:
+        text = await _gemini_generate(
+            injected_system, messages,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+
+    if not text and GROQ_API_KEY:
         for model in config.GROQ_MODELS:
             text = await _openai_compat_chat(
                 GROQ_URL, GROQ_API_KEY, model, rest_messages,
