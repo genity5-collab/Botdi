@@ -69,7 +69,7 @@ async def _openai_compat_chat(
     messages: list[dict],
     *,
     temperature: float = 0.8,
-    max_tokens: int = 1200,
+    max_tokens: int = 200,
     timeout: int = 30,
 ) -> str:
     """Call an OpenAI-compatible /chat/completions endpoint."""
@@ -109,7 +109,7 @@ async def _huggingface_chat(
     messages: list[dict],
     *,
     temperature: float = 0.8,
-    max_tokens: int = 1200,
+    max_tokens: int = 200,
 ) -> str:
     if not HUGGINGFACE_API_KEY:
         return ""
@@ -143,8 +143,7 @@ async def _huggingface_chat(
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 HF_URL.format(model=HF_MODEL),
-                headers=headers,
-                json=payload,
+                headers=headers, json=payload,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status != 200:
@@ -167,7 +166,7 @@ async def _gemini_generate(
     messages: list[dict],
     *,
     temperature: float = 0.8,
-    max_tokens: int = 1200,
+    max_tokens: int = 200,
     image_parts: list[tuple[bytes, str]] | None = None,
 ) -> str:
     client, gt = _get_gemini()
@@ -216,7 +215,7 @@ async def generate(
     messages: list[dict],
     *,
     temperature: float = 0.8,
-    max_tokens: int = 1200,
+    max_tokens: int = 200,
     image_parts: list[tuple[bytes, str]] | None = None,
 ) -> str:
     """
@@ -265,7 +264,7 @@ async def generate(
         if text:
             return text
 
-    return "I hit a snag reaching the AI. Try again in a moment."
+    return "I'm having trouble responding right now. Try again in a moment."
 
 
 # ── Gemini function-calling (for subagent) ─────────────────────────────────────
@@ -310,16 +309,11 @@ async def openai_function_call(
     tools_json: list[dict],
     *,
     temperature: float = 0.7,
-    max_tokens: int = 1200,
+    max_tokens: int = 200,
 ) -> dict | None:
     """
     Call an OpenAI-compatible /chat/completions endpoint with tool calling.
     Tries Groq → OpenRouter → Cerebras (whichever keys are configured).
-
-    Returns a dict with:
-      'tool_calls': list of {'name': str, 'arguments': dict} or None
-      'content': str (text reply if no tool calls)
-    or None if no provider is available / all fail.
     """
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
     openai_tools = [{"type": "function", "function": t} for t in tools_json]
@@ -390,16 +384,11 @@ async def text_function_call(
     tools_json: list[dict],
     *,
     temperature: float = 0.7,
-    max_tokens: int = 1200,
+    max_tokens: int = 200,
 ) -> dict | None:
     """
     Text-based function calling fallback for models without native tool calling.
     Injects tool schemas into the system prompt and parses JSON from the response.
-
-    Returns a dict with:
-      'tool_calls': list of {'name': str, 'arguments': dict} or None
-      'content': str (text reply if no tool calls)
-    or None if no provider is available / all fail.
     """
     tool_descriptions = "\n".join(
         f"- {t['name']}: {t['description']}\n  params: {json.dumps(t['parameters'])}"
