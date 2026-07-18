@@ -9,7 +9,7 @@ components, and more.
 
 Permissions:
   - Bot owner: infinite usage
-  - Guild owner (server owner): 5 uses per week
+  - Guild owner (server owner): 2 uses per week
   - Administrators: NOT allowed
 
 API errors are never shown to the user.
@@ -34,6 +34,7 @@ from config import (
     LOG_CHANNEL_ID, BOT_COLOR, COLOR_OK, COLOR_ERR, BOT_OWNER_ID, BOT_NAME,
     SUBAGENT_RATE_LIMIT, SUBAGENT_RATE_WINDOW,
 )
+import data_store
 from data_store import (
     check_subagent_rate_limit,
     get_always_allow_deletes,
@@ -1001,7 +1002,7 @@ class Subagent(commands.Cog, name="Subagent"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="subagent", description="Ask the AI to perform Discord actions (server owners only, 5/week)")
+    @app_commands.command(name="subagent", description="Ask the AI to perform Discord actions (server owners only, 2/week)")
     @app_commands.describe(prompt="What should the AI do? e.g. 'Create a channel for @youtuber role only to chat'")
     async def subagent(self, interaction: discord.Interaction, prompt: str) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -1385,7 +1386,7 @@ class Subagent(commands.Cog, name="Subagent"):
                 if name == "delete_channel":
                     ch = _find_channel(guild, args["channel_name"])
                     if not ch:
-                        return f"Channel '{args['channel_name}' not found."
+                        return f"Channel '{args['channel_name']}' not found."
                     chname = ch.name
                     if not await _confirm(f"Delete channel #{chname}?"):
                         return f"Cancelled deletion of #{chname}."
