@@ -23,6 +23,9 @@ MEMORIES_FILE   = DATA_DIR / "memories.json"
 RATE_LIMIT_FILE = DATA_DIR / "rate_limits.json"
 TAUGHT_FILE     = DATA_DIR / "taught.json"
 RULES_FILE      = DATA_DIR / "rules.json"
+SYSTEMS_FILE    = DATA_DIR / "systems.json"
+ACTION_HISTORY_FILE = DATA_DIR / "action_history.json"
+SCHEDULED_FILE  = DATA_DIR / "scheduled_actions.json"
 
 _lock = asyncio.Lock()
 
@@ -320,3 +323,451 @@ async def clear_rules(guild_id: int) -> None:
     async with _lock:
         _rules.pop(str(guild_id), None)
         _save(RULES_FILE, _rules)
+
+
+# ── Systems data (panels, autorole, welcome, suggestions, applications,
+#      giveaways, verification, backups, snapshots, action history,
+#      scheduled actions, automation, always-allow-deletes) ────────────────────
+
+_systems: dict[str, dict] = _load(SYSTEMS_FILE)
+_action_history: dict[str, list[dict]] = _load(ACTION_HISTORY_FILE)
+_scheduled: dict[str, list[dict]] = _load(SCHEDULED_FILE)
+
+
+def _guild_systems(guild_id: int) -> dict:
+    key = str(guild_id)
+    if key not in _systems:
+        _systems[key] = {
+            "ticket_panels": {},
+            "autorole": {"enabled": False, "roles": []},
+            "welcome": {"enabled": False, "channel_id": None, "message": "", "goodbye_channel_id": None, "goodbye_message": ""},
+            "suggestions": {"channel_id": None},
+            "applications": {},
+            "giveaways": {},
+            "verification": {"enabled": False, "role_id": None, "channel_id": None, "message": ""},
+            "always_allow_deletes": False,
+        }
+    return _systems[key]
+
+
+async def save_systems() -> None:
+    async with _lock:
+        _save(SYSTEMS_FILE, _systems)
+
+
+async def get_guild_systems(guild_id: int) -> dict:
+    async with _lock:
+        return _guild_systems(guild_id)
+
+
+async def set_always_allow_deletes(guild_id: int, value: bool) -> bool:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        g["always_allow_deletes"] = value
+        await save_systems()
+        return value
+
+
+async def get_always_allow_deletes(guild_id: int) -> bool:
+    async with _lock:
+        return _guild_systems(guild_id).get("always_allow_deletes", False)
+
+
+# ── Ticket panels ────────────────────────────────────────────────────────────
+
+async def create_ticket_panel(guild_id: int, panel_id: str, channel_id: int, title: str, description: str, categories: list[str]) -> dict:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        panel = {
+            "channel_id": channel_id, "title": title, "description": description,
+            "categories": categories, "message_id": None, "tickets": {},
+        }
+        g["ticket_panels"][panel_id] = panel
+        await save_systems()
+        return panel
+
+
+async def get_ticket_panel(guild_id: int, panel_id: str) -> dict | None:
+    async with _lock:
+        return _guild_systems(guild_id)["ticket_panels"].get(panel_id)
+
+
+async def list_ticket_panels(guild_id: int) -> dict:
+    async with _lock:
+        return _guild_systems(guild_id)["ticket_panels"]
+
+
+async def delete_ticket_panel(guild_id: int, panel_id: str) -> bool:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if panel_id in g["ticket_panels"]:
+            del g["ticket_panels"][panel_id]
+            await save_systems()
+            return True
+        return False
+
+
+async def set_panel_message_id(guild_id: int, panel_id: str, message_id: int) -> None:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if panel_id in g["ticket_panels"]:
+            g["ticket_panels"][panel_id]["message_id"] = message_id
+            await save_systems()
+
+
+async def add_panel_ticket(guild_id: int, panel_id: str, ticket_id: str, user_id: int, channel_id: int, category: str) -> None:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if panel_id in g["ticket_panels"]:
+            g["ticket_panels"][panel_id]["tickets"][ticket_id] = {
+                "user_id": user_id, "channel_id": channel_id, "category": category, "status": "open", "created_at": int(time.time()),
+            }
+            await save_systems()
+
+
+async def close_panel_ticket(guild_id: int, panel_id: str, ticket_id: str) -> bool:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        panel = g["ticket_panels"].get(panel_id)
+        if panel and ticket_id in panel["tickets"]:
+            panel["tickets"][ticket_id]["status"] = "closed"
+            await save_systems()
+            return True
+        return False
+
+
+# ── Autorole ──────────────────────────────────────────────────────────────────
+
+async def set_autorole(guild_id: int, enabled: bool, roles: list[int]) -> dict:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        g["autorole"] = {"enabled": enabled, "roles": roles}
+        await save_systems()
+        return g["autorole"]
+
+
+async def get_autorole(guild_id: int) -> dict:
+    async with _lock:
+        return _guild_systems(guild_id)["autorole"]
+
+
+# ── Welcome / goodbye ─────────────────────────────────────────────────────────
+
+async def set_welcome(guild_id: int, enabled: bool, channel_id: int | None, message: str, goodbye_channel_id: int | None = None, goodbye_message: str = "") -> dict:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        g["welcome"] = {
+            "enabled": enabled, "channel_id": channel_id, "message": message,
+            "goodbye_channel_id": goodbye_channel_id, "goodbye_message": goodbye_message,
+        }
+        await save_systems()
+        return g["welcome"]
+
+
+async def get_welcome(guild_id: int) -> dict:
+    async with _lock:
+        return _guild_systems(guild_id)["welcome"]
+
+
+# ── Suggestions ───────────────────────────────────────────────────────────────
+
+async def set_suggestion_channel(guild_id: int, channel_id: int) -> None:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        g["suggestions"] = {"channel_id": channel_id}
+        await save_systems()
+
+
+async def get_suggestions(guild_id: int) -> dict:
+    async with _lock:
+        return _guild_systems(guild_id)["suggestions"]
+
+
+# ── Applications / forms ─────────────────────────────────────────────────────
+
+async def create_application(guild_id: int, app_id: str, name: str, description: str, questions: list[str], channel_id: int) -> dict:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        app = {
+            "name": name, "description": description, "questions": questions,
+            "channel_id": channel_id, "message_id": None, "submissions": {},
+        }
+        g["applications"][app_id] = app
+        await save_systems()
+        return app
+
+
+async def get_application(guild_id: int, app_id: str) -> dict | None:
+    async with _lock:
+        return _guild_systems(guild_id)["applications"].get(app_id)
+
+
+async def list_applications(guild_id: int) -> dict:
+    async with _lock:
+        return _guild_systems(guild_id)["applications"]
+
+
+async def delete_application(guild_id: int, app_id: str) -> bool:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if app_id in g["applications"]:
+            del g["applications"][app_id]
+            await save_systems()
+            return True
+        return False
+
+
+async def set_application_message_id(guild_id: int, app_id: str, message_id: int) -> None:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if app_id in g["applications"]:
+            g["applications"][app_id]["message_id"] = message_id
+            await save_systems()
+
+
+async def add_application_submission(guild_id: int, app_id: str, submission_id: str, user_id: int, answers: list[str]) -> None:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if app_id in g["applications"]:
+            g["applications"][app_id]["submissions"][submission_id] = {
+                "user_id": user_id, "answers": answers, "status": "pending", "ts": int(time.time()),
+            }
+            await save_systems()
+
+
+async def update_application_submission_status(guild_id: int, app_id: str, submission_id: str, status: str) -> bool:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        app = g["applications"].get(app_id)
+        if app and submission_id in app["submissions"]:
+            app["submissions"][submission_id]["status"] = status
+            await save_systems()
+            return True
+        return False
+
+
+# ── Giveaways ─────────────────────────────────────────────────────────────────
+
+async def create_giveaway(guild_id: int, giveaway_id: str, channel_id: int, title: str, description: str, prize: str, duration_minutes: int, winners: int) -> dict:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        end_ts = int(time.time()) + duration_minutes * 60
+        gw = {
+            "channel_id": channel_id, "title": title, "description": description,
+            "prize": prize, "end_ts": end_ts, "winners": winners,
+            "message_id": None, "participants": [], "ended": False,
+        }
+        g["giveaways"][giveaway_id] = gw
+        await save_systems()
+        return gw
+
+
+async def get_giveaway(guild_id: int, giveaway_id: str) -> dict | None:
+    async with _lock:
+        return _guild_systems(guild_id)["giveaways"].get(giveaway_id)
+
+
+async def list_giveaways(guild_id: int) -> dict:
+    async with _lock:
+        return _guild_systems(guild_id)["giveaways"]
+
+
+async def set_giveaway_message_id(guild_id: int, giveaway_id: str, message_id: int) -> None:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if giveaway_id in g["giveaways"]:
+            g["giveaways"][giveaway_id]["message_id"] = message_id
+            await save_systems()
+
+
+async def add_giveaway_participant(guild_id: int, giveaway_id: str, user_id: int) -> bool:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        gw = g["giveaways"].get(giveaway_id)
+        if not gw or gw["ended"]:
+            return False
+        if user_id not in gw["participants"]:
+            gw["participants"].append(user_id)
+            await save_systems()
+        return True
+
+
+async def end_giveaway(guild_id: int, giveaway_id: str) -> dict | None:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        gw = g["giveaways"].get(giveaway_id)
+        if not gw:
+            return None
+        gw["ended"] = True
+        await save_systems()
+        return gw
+
+
+async def delete_giveaway(guild_id: int, giveaway_id: str) -> bool:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if giveaway_id in g["giveaways"]:
+            del g["giveaways"][giveaway_id]
+            await save_systems()
+            return True
+        return False
+
+
+# ── Verification ───────────────────────────────────────────────────────────────
+
+async def set_verification(guild_id: int, enabled: bool, role_id: int | None, channel_id: int | None, message: str) -> dict:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        g["verification"] = {"enabled": enabled, "role_id": role_id, "channel_id": channel_id, "message": message}
+        await save_systems()
+        return g["verification"]
+
+
+async def get_verification(guild_id: int) -> dict:
+    async with _lock:
+        return _guild_systems(guild_id)["verification"]
+
+
+# ── Server snapshots ───────────────────────────────────────────────────────────
+
+async def save_snapshot(guild_id: int, snapshot_id: str, name: str, data: dict) -> dict:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if "snapshots" not in g:
+            g["snapshots"] = {}
+        snap = {"id": snapshot_id, "name": name, "ts": int(time.time()), "data": data}
+        g["snapshots"][snapshot_id] = snap
+        await save_systems()
+        return snap
+
+
+async def get_snapshot(guild_id: int, snapshot_id: str) -> dict | None:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        return g.get("snapshots", {}).get(snapshot_id)
+
+
+async def list_snapshots(guild_id: int) -> dict:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        return g.get("snapshots", {})
+
+
+async def delete_snapshot(guild_id: int, snapshot_id: str) -> bool:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        snaps = g.get("snapshots", {})
+        if snapshot_id in snaps:
+            del snaps[snapshot_id]
+            await save_systems()
+            return True
+        return False
+
+
+# ── Action history ────────────────────────────────────────────────────────────
+
+MAX_ACTION_HISTORY = 500
+
+
+async def add_action_history(guild_id: int, action: str, detail: str, undo_data: dict | None = None) -> None:
+    async with _lock:
+        key = str(guild_id)
+        arr = _action_history.setdefault(key, [])
+        entry = {
+            "ts": int(time.time()),
+            "action": action,
+            "detail": detail[:500],
+            "undo_data": undo_data,
+        }
+        arr.append(entry)
+        if len(arr) > MAX_ACTION_HISTORY:
+            arr = arr[-MAX_ACTION_HISTORY:]
+        _save(ACTION_HISTORY_FILE, _action_history)
+
+
+async def get_action_history(guild_id: int, limit: int = 25) -> list[dict]:
+    async with _lock:
+        arr = _action_history.get(str(guild_id), [])
+        return list(arr[-limit:])
+
+
+async def get_last_action(guild_id: int) -> dict | None:
+    async with _lock:
+        arr = _action_history.get(str(guild_id), [])
+        return arr[-1] if arr else None
+
+
+# ── Scheduled actions ─────────────────────────────────────────────────────────
+
+async def add_scheduled_action(guild_id: int, sched_id: str, channel_id: int, content: str, cron_day: str, hour: int, minute: int) -> dict:
+    async with _lock:
+        key = str(guild_id)
+        arr = _scheduled.setdefault(key, [])
+        entry = {
+            "id": sched_id, "channel_id": channel_id, "content": content[:2000],
+            "day": cron_day, "hour": hour, "minute": minute, "last_run": 0, "enabled": True,
+        }
+        arr.append(entry)
+        _save(SCHEDULED_FILE, _scheduled)
+        return entry
+
+
+async def list_scheduled_actions(guild_id: int) -> list[dict]:
+    async with _lock:
+        return list(_scheduled.get(str(guild_id), []))
+
+
+async def remove_scheduled_action(guild_id: int, sched_id: str) -> bool:
+    async with _lock:
+        key = str(guild_id)
+        arr = _scheduled.get(key, [])
+        for i, e in enumerate(arr):
+            if e["id"] == sched_id:
+                arr.pop(i)
+                _save(SCHEDULED_FILE, _scheduled)
+                return True
+        return False
+
+
+async def update_scheduled_last_run(guild_id: int, sched_id: str, ts: int) -> None:
+    async with _lock:
+        key = str(guild_id)
+        for e in _scheduled.get(key, []):
+            if e["id"] == sched_id:
+                e["last_run"] = ts
+                _save(SCHEDULED_FILE, _scheduled)
+                return
+
+
+# ── Automation triggers ───────────────────────────────────────────────────────
+
+async def set_automation(guild_id: int, trigger: str, actions: dict) -> dict:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if "automation" not in g:
+            g["automation"] = {}
+        g["automation"][trigger] = actions
+        await save_systems()
+        return g["automation"][trigger]
+
+
+async def get_automation(guild_id: int, trigger: str) -> dict | None:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        return g.get("automation", {}).get(trigger)
+
+
+async def list_automation(guild_id: int) -> dict:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        return g.get("automation", {})
+
+
+async def remove_automation(guild_id: int, trigger: str) -> bool:
+    async with _lock:
+        g = _guild_systems(guild_id)
+        if "automation" in g and trigger in g["automation"]:
+            del g["automation"][trigger]
+            await save_systems()
+            return True
+        return False
