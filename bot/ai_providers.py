@@ -290,7 +290,13 @@ async def openai_function_call(
     *,
     temperature: float = 0.4,
     max_tokens: int = 2000,
+    force_tools: bool = False,
 ) -> dict | None:
+    """
+    Call an OpenAI-compatible endpoint with native tool calling.
+    If force_tools=True, uses tool_choice='required' to force function calls.
+    This prevents the AI from returning text like 'Working on it...' instead of actually calling functions.
+    """
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
     openai_tools = [{"type": "function", "function": t} for t in tools_json]
     providers = []
@@ -312,7 +318,7 @@ async def openai_function_call(
             "model": model,
             "messages": rest_messages,
             "tools": openai_tools,
-            "tool_choice": "auto",
+            "tool_choice": "required" if force_tools else "auto",
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
