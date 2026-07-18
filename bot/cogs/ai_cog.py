@@ -10,6 +10,7 @@ Vyrion AI Cog
 - Multi-provider fallback: Gemini → Groq → OpenRouter → HuggingFace → Cerebras
 - Enforced rules via /rule — programmatically appended to every response
 - Rate limiting: server 5/hr, DM 15/3day-cycle (degrading), owner infinite
+- Logs all conversations + analytics to Studio Dashboard (Supabase)
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 
 import discord
 from discord import app_commands
@@ -47,6 +49,7 @@ from data_store import (
 from utils import check_profanity_at_bot, check_pii_tos, sanitize_ai_output, count_words, enforce_word_limit, append_enforced_rules
 import roblox as roblox_api
 import ai_providers
+import studio_sync
 
 log = logging.getLogger("vyrion.ai")
 
@@ -162,12 +165,33 @@ def _is_admin(interaction: discord.Interaction) -> bool:
     return False
 
 
+def _detect_intent(text: str) -> str:
+    """Lightweight intent detection for analytics."""
+    t = text.lower().strip()
+    if any(w in t for w in ["create", "make", "build", "set up", "add"]):
+        return "create_request"
+    if any(w in t for w in ["delete", "remove", "purge", "clear"]):
+        return "delete_request"
+    if any(w in t for w in ["edit", "change", "update", "modify", "rename"]):
+        return "edit_request"
+    if any(w in t for w in ["ban", "kick", "mute", "warn", "timeout"]):
+        return "moderation_request"
+    if any(w in t for w in ["roblox", "game", "trending"]):
+        return "roblox_lookup"
+    if any(w in t for w in ["help", "how do", "how to", "what is", "what's"]):
+        return "question"
+    if any(w in t for w in ["ticket", "support", "giveaway", "poll"]):
+        return "system_request"
+    return "conversation"
+
+
 async def _generate(
     user_text: str,
     history: list[dict],
     server_facts: str,
     image_parts: list[tuple[bytes, str]] | None = None,
-) -> str:
+) -> tuple[str, str | None, str | None]:
+    """Returns (reply_text, provider_used, model_used)."""
     sys_prompt = SYSTEM_PROMPT
     if server_facts:
         sys_prompt += f"\n\n[Server knowledge]\n{server_facts}"
@@ -181,14 +205,14 @@ async def _generate(
         messages.append({"role": m["role"] if m["role"] in ("user", "assistant") else "user", "content": m["content"]})
     messages.append({"role": "user", "content": user_text})
 
-    reply_text = await ai_providers.generate(
+    reply_text, provider, model = await ai_providers.generate_with_meta(
         sys_prompt, messages,
         temperature=0.7, max_tokens=500,
         image_parts=image_parts,
     )
 
     if not reply_text:
-        return "I'm having trouble responding right now. Try again in a moment."
+        return "I'm having trouble responding right now. Try again in a moment.", provider, model
 
     stripped = reply_text.strip().strip("`")
     if stripped.startswith("{") and '"tool"' in stripped:
@@ -200,17 +224,17 @@ async def _generate(
                     {"role": "assistant", "content": stripped},
                     {"role": "user", "content": f"[roblox tool result]\n{tool_out}\n\nAnswer the user using this data. Do not emit JSON."},
                 ]
-                final = await ai_providers.generate(
+                final, _, _ = await ai_providers.generate_with_meta(
                     SYSTEM_PROMPT, follow_messages,
                     temperature=0.6, max_tokens=500,
                 )
                 if final:
-                    return final
-                return tool_out
+                    return final, provider, model
+                return tool_out, provider, model
         except json.JSONDecodeError:
             pass
 
-    return reply_text
+    return reply_text, provider, model
 
 
 class AI(commands.Cog, name="AI"):
@@ -224,6 +248,39 @@ class AI(commands.Cog, name="AI"):
             lk = asyncio.Lock()
             self._locks[uid] = lk
         return lk
+
+    def _log_conv(
+        self,
+        message: discord.Message,
+        prompt: str,
+        reply: str,
+        provider: str | None,
+        model: str | None,
+        response_ms: int,
+    ) -> None:
+        guild_id = message.guild.id if message.guild else None
+        intent = _detect_intent(prompt)
+        escalated = any(w in intent for w in ["create", "delete", "edit", "system"])
+        studio_sync.log_conversation(
+            discord_user_id=message.author.id,
+            guild_id=guild_id,
+            channel_id=message.channel.id if hasattr(message.channel, "id") else None,
+            user_message=prompt,
+            ai_response=reply,
+            intent=intent,
+            escalated_to_subagent=escalated,
+            model_used=model,
+            provider=provider,
+            response_time_ms=response_ms,
+        )
+        studio_sync.log_analytics(
+            event_type="ai_response",
+            event_category="ai_agent",
+            event_name="message_handled",
+            value={"intent": intent, "provider": provider, "model": model},
+            success=True,
+            guild_id=str(guild_id) if guild_id else None,
+        )
 
     async def _respond(self, message: discord.Message, prompt: str) -> None:
         user = message.author
@@ -262,9 +319,11 @@ class AI(commands.Cog, name="AI"):
 
         async with self._lock(user.id):
             async with message.channel.typing():
+                t0 = time.monotonic()
                 server_facts = get_taught(0)
                 history = get_memory(user.id)
-                reply = await _generate(prompt, history, server_facts, image_parts)
+                reply, provider, model = await _generate(prompt, history, server_facts, image_parts)
+                response_ms = int((time.monotonic() - t0) * 1000)
 
                 reply = sanitize_ai_output(reply, user_message=prompt)
                 reply = enforce_word_limit(reply, is_code=bool(re.search(r'```|def |class |function |import |const |var |print\(', reply)), normal_limit=80, code_limit=150)
@@ -274,6 +333,8 @@ class AI(commands.Cog, name="AI"):
                 add_memory(user.id, "user", prompt if not image_parts else f"{prompt} [+{len(image_parts)} image(s)]")
                 add_memory(user.id, "assistant", reply)
                 await save_memory()
+
+        self._log_conv(message, prompt, reply, provider, model, response_ms)
 
         chunks = _chunk(reply)
         first = True
@@ -336,8 +397,10 @@ class AI(commands.Cog, name="AI"):
             return
 
         await interaction.response.defer(thinking=True)
+        t0 = time.monotonic()
         history = get_memory(interaction.user.id)
-        reply = await _generate(question, history, get_taught(0))
+        reply, provider, model = await _generate(question, history, get_taught(0))
+        response_ms = int((time.monotonic() - t0) * 1000)
         reply = sanitize_ai_output(reply, user_message=question)
         reply = enforce_word_limit(reply, is_code=bool(re.search(r'```|def |class |function |import |const |var |print\(', reply)), normal_limit=80, code_limit=150)
         rules_text = get_rules_text(0)
@@ -345,6 +408,22 @@ class AI(commands.Cog, name="AI"):
         add_memory(interaction.user.id, "user", question)
         add_memory(interaction.user.id, "assistant", reply)
         await save_memory()
+
+        guild_id = interaction.guild.id if interaction.guild else None
+        intent = _detect_intent(question)
+        studio_sync.log_conversation(
+            discord_user_id=interaction.user.id,
+            guild_id=guild_id,
+            channel_id=interaction.channel.id if hasattr(interaction.channel, "id") else None,
+            user_message=question,
+            ai_response=reply,
+            intent=intent,
+            escalated_to_subagent=any(w in intent for w in ["create", "delete", "edit", "system"]),
+            model_used=model,
+            provider=provider,
+            response_time_ms=response_ms,
+        )
+
         chunks = _chunk(reply)
         await interaction.followup.send(chunks[0])
         for ch in chunks[1:]:
@@ -367,6 +446,13 @@ class AI(commands.Cog, name="AI"):
             await interaction.response.send_message("Only the bot owner or server admins can teach me.", ephemeral=True)
             return
         await add_taught(0, fact.strip(), interaction.user.id)
+        studio_sync.log_analytics(
+            event_type="teach",
+            event_category="system",
+            event_name="fact_taught",
+            value={"fact": fact[:200]},
+            guild_id=str(interaction.guild.id) if interaction.guild else None,
+        )
         await interaction.response.send_message(
             f"📚 Learned. I'll remember this globally:\n> {fact[:500]}",
             ephemeral=True,
@@ -405,6 +491,15 @@ class AI(commands.Cog, name="AI"):
             await interaction.response.send_message("Only the bot owner or server admins can set rules.", ephemeral=True)
             return
         count = await add_rule(0, rule.strip(), interaction.user.id)
+        studio_sync.log_edit(
+            action_type="add_rule",
+            action_category="config",
+            target="enforced_rules",
+            after_value={"rule": rule[:200], "number": count},
+            triggered_by="user",
+            triggered_by_name=str(interaction.user),
+            guild_id=str(interaction.guild.id) if interaction.guild else None,
+        )
         await interaction.response.send_message(
             f"📋 Rule added (#{count}). The bot will now follow this in every response:\n> {rule[:500]}",
             ephemeral=True,
@@ -427,8 +522,20 @@ class AI(commands.Cog, name="AI"):
         if not _is_admin(interaction):
             await interaction.response.send_message("Only the bot owner or server admins can remove rules.", ephemeral=True)
             return
+        rules = get_rules(0)
+        if 0 < number <= len(rules):
+            removed_rule = rules[number - 1].get("rule", "")
         removed = await remove_rule(0, number - 1)
         if removed:
+            studio_sync.log_edit(
+                action_type="remove_rule",
+                action_category="config",
+                target="enforced_rules",
+                before_value={"rule": removed_rule[:200], "number": number},
+                triggered_by="user",
+                triggered_by_name=str(interaction.user),
+                guild_id=str(interaction.guild.id) if interaction.guild else None,
+            )
             await interaction.response.send_message(f"📋 Rule #{number} removed.", ephemeral=True)
         else:
             await interaction.response.send_message(f"Rule #{number} not found. Use /rules to see the list.", ephemeral=True)
@@ -439,6 +546,14 @@ class AI(commands.Cog, name="AI"):
             await interaction.response.send_message("Only the bot owner or server admins can clear rules.", ephemeral=True)
             return
         await clear_rules(0)
+        studio_sync.log_edit(
+            action_type="clear_rules",
+            action_category="config",
+            target="enforced_rules",
+            before_value={"count": len(get_rules(0))},
+            triggered_by="user",
+            triggered_by_name=str(interaction.user),
+        )
         await interaction.response.send_message("🧽 All enforced rules cleared.", ephemeral=True)
 
     @app_commands.command(name="model", description="Change the active AI model (bot owner only).")
@@ -512,6 +627,12 @@ class AI(commands.Cog, name="AI"):
             changed = True
 
         if changed:
+            studio_sync.log_analytics(
+                event_type="model_change",
+                event_category="system",
+                event_name="active_model_changed",
+                value={"provider": provider.value, "model": model},
+            )
             await interaction.response.send_message(f"✅ Active {provider.value} model changed to: `{model}`", ephemeral=True)
         else:
             await interaction.response.send_message("Unknown provider.", ephemeral=True)
