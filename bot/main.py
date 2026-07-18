@@ -1,6 +1,6 @@
 """
 Nexus — main entrypoint.
-Loads all cogs, syncs slash commands, sets presence.
+Loads all cogs, syncs slash commands, sets presence, syncs guilds to Studio.
 """
 from __future__ import annotations
 
@@ -38,6 +38,7 @@ class Nexus(commands.Bot):
             "cogs.support",
             "cogs.subagent",
             "cogs.systems",
+            "cogs.studio_cog",
         ):
             try:
                 await self.load_extension(ext)
@@ -59,6 +60,14 @@ class Nexus(commands.Bot):
                 name="Nexus | /help",
             )
         )
+        # Sync all guilds to Studio Dashboard
+        try:
+            import studio_sync
+            for guild in self.guilds:
+                studio_sync.sync_guild(guild)
+            log.info("Synced %d guilds to Studio", len(self.guilds))
+        except Exception as e:
+            log.debug("Guild sync failed: %s", e)
 
 
 async def main() -> None:
