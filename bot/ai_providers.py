@@ -193,6 +193,23 @@ async def generate(
     max_tokens: int = 200,
     image_parts: list[tuple[bytes, str]] | None = None,
 ) -> str:
+    text, _, _ = await generate_with_meta(
+        system_prompt, messages,
+        temperature=temperature, max_tokens=max_tokens,
+        image_parts=image_parts,
+    )
+    return text
+
+
+async def generate_with_meta(
+    system_prompt: str,
+    messages: list[dict],
+    *,
+    temperature: float = 0.8,
+    max_tokens: int = 200,
+    image_parts: list[tuple[bytes, str]] | None = None,
+) -> tuple[str, str | None, str | None]:
+    """Like generate() but also returns (provider, model) used for analytics."""
     if GEMINI_API_KEY:
         text = await _gemini_generate(
             system_prompt, messages,
@@ -200,7 +217,7 @@ async def generate(
             image_parts=image_parts,
         )
         if text:
-            return text
+            return text, "gemini", getattr(config, "ACTIVE_GEMINI_MODEL", GEMINI_MODEL)
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
     if GROQ_API_KEY:
         active_groq = getattr(config, "ACTIVE_GROQ_MODEL", config.GROQ_MODELS[0])
@@ -211,7 +228,7 @@ async def generate(
                 temperature=temperature, max_tokens=max_tokens,
             )
             if text:
-                return text
+                return text, "groq", model
     if OPENROUTER_API_KEY:
         active_or = getattr(config, "ACTIVE_OPENROUTER_MODEL", config.OPENROUTER_MODELS[0])
         or_models = [active_or] + [m for m in config.OPENROUTER_MODELS if m != active_or]
@@ -221,7 +238,7 @@ async def generate(
                 temperature=temperature, max_tokens=max_tokens,
             )
             if text:
-                return text
+                return text, "openrouter", model
     if HUGGINGFACE_API_KEY:
         active_hf = getattr(config, "ACTIVE_HF_MODEL", config.HUGGINGFACE_MODELS[0])
         hf_models = [active_hf] + [m for m in config.HUGGINGFACE_MODELS if m != active_hf]
@@ -231,7 +248,7 @@ async def generate(
                 temperature=temperature, max_tokens=max_tokens,
             )
             if text:
-                return text
+                return text, "huggingface", model
     if CEREBRAS_API_KEY:
         active_cb = getattr(config, "ACTIVE_CEREBRAS_MODEL", config.CEREBRAS_MODELS[0])
         cb_models = [active_cb] + [m for m in config.CEREBRAS_MODELS if m != active_cb]
@@ -241,8 +258,8 @@ async def generate(
                 temperature=temperature, max_tokens=max_tokens,
             )
             if text:
-                return text
-    return "I'm having trouble responding right now. Try again in a moment."
+                return text, "cerebras", model
+    return "I'm having trouble responding right now. Try again in a moment.", None, None
 
 
 async def gemini_function_call(
