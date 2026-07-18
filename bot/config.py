@@ -43,12 +43,12 @@ CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
-# Subagent: 5 per week for guild owners, bot owner infinite
-# Server: 5 messages per hour for everyone, owner infinite
+# Subagent: 2 per week for guild owners, bot owner infinite
+# Server: 6 messages per hour for everyone, owner infinite
 # DM: 15 messages per 3-day cycle, degrading: day1=15, day2=10, day3=5, then 0
-SUBAGENT_RATE_LIMIT    = 5
+SUBAGENT_RATE_LIMIT    = 2
 SUBAGENT_RATE_WINDOW   = 7 * 24 * 3600  # 1 week
-SERVER_RATE_LIMIT      = 5
+SERVER_RATE_LIMIT      = 6
 SERVER_RATE_WINDOW     = 3600
 DM_RATE_LIMIT_CYCLE    = 3 * 24 * 3600
 DM_DAY1_LIMIT          = 15
