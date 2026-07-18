@@ -2051,12 +2051,17 @@ class Subagent(commands.Cog, name="Subagent"):
                 contents = [genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=prompt)])]
                 tools = _build_tools()
 
-                for _ in range(MAX_ROUNDS):
+                for gemini_round in range(MAX_ROUNDS):
                     response = await ai_providers.gemini_function_call(full_system, contents, tools)
                     if response is None:
                         use_gemini = False
                         break
                     if not response.function_calls:
+                        if gemini_round < 3 and not edit_log:
+                            contents.append(genai_types.Content(role="model", parts=[genai_types.Part.from_text(text=response.text or "")]))
+                            contents.append(genai_types.Content(role="user", parts=[genai_types.Part.from_text(text="You have NOT called any functions yet. You MUST call the appropriate function(s) NOW to execute the user's request. Do not describe what you would do — CALL THE FUNCTIONS.")]))
+
+                            continue
                         final_text = response.text or "Done."
                         break
                     fc_parts = []
@@ -2075,7 +2080,8 @@ class Subagent(commands.Cog, name="Subagent"):
                 chat_messages: list[dict] = [{"role": "user", "content": prompt}]
 
                 for round_num in range(MAX_ROUNDS):
-                    result = await ai_providers.openai_function_call(full_system, chat_messages, tools_json)
+                    force = round_num < 3 and not edit_log
+                    result = await ai_providers.openai_function_call(full_system, chat_messages, tools_json, force_tools=force)
                     if result is None:
                         result = await ai_providers.text_function_call(full_system, chat_messages, tools_json)
                         if result is None:
@@ -2083,6 +2089,10 @@ class Subagent(commands.Cog, name="Subagent"):
                             break
                     tool_calls = result.get("tool_calls")
                     if not tool_calls:
+                        if round_num < 3 and not edit_log:
+                            chat_messages.append({"role": "assistant", "content": result.get("content", "")})
+                            chat_messages.append({"role": "user", "content": "You have NOT called any functions yet. You MUST call the appropriate function(s) NOW to execute the user's request. Do not describe what you would do — CALL THE FUNCTIONS."})
+                            continue
                         final_text = result.get("content") or "Done."
                         break
                     for idx, tc in enumerate(tool_calls):
