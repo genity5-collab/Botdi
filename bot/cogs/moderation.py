@@ -4,7 +4,7 @@ Moderation Cog
 Commands : !strike, !kick, !ban, !strikes, !mute, !unmute, !warn, !purge, !slowmode, !lock, !unlock
 Auto-mod  : Blacklisted words → 1 h timeout (15 s filter cooldown per user)
 Logic     : 1 strike = 24 h timeout  |  3 strikes = ban
-            All actions logged to LOG_CHANNEL_ID.
+            All actions logged to LOG_CHANNEL_ID and Studio Dashboard.
             Violating users receive a branded appeal DM.
 """
 
@@ -29,6 +29,7 @@ from config import (
 )
 from data_store import add_strike, get_strikes, reset_strikes
 from utils import build_appeal_embed, log_action, parse_user_id
+import studio_sync
 
 # Pre-compile lower-case word list for fast lookup
 _BLACKLIST: list[str] = [w.lower() for w in BLACKLISTED_WORDS]
@@ -118,6 +119,26 @@ class Moderation(commands.Cog, name="Moderation"):
             f"**Outcome:** {action_taken}",
         )
 
+        studio_sync.log_automod(
+            guild_id=guild.id,
+            channel_id=None,
+            user_discord_id=target.id,
+            severity="high" if total >= STRIKES_FOR_BAN else "medium",
+            category="other",
+            action_taken="ban" if total >= STRIKES_FOR_BAN else "timeout",
+            content_snippet=reason[:200],
+        )
+        studio_sync.log_edit(
+            action_type="strike",
+            action_category="config",
+            target=f"user:{target.id}",
+            after_value={"strikes": total, "action": action_taken},
+            triggered_by="moderator",
+            triggered_by_name=str(moderator),
+            status="success",
+            guild_id=str(guild.id),
+        )
+
         try:
             dm = await target.create_dm()
             await dm.send(embed=build_appeal_embed(reason))
@@ -183,6 +204,24 @@ class Moderation(commands.Cog, name="Moderation"):
             f"**Action:** {action_taken}",
         )
 
+        studio_sync.log_automod(
+            guild_id=message.guild.id,
+            channel_id=message.channel.id if hasattr(message.channel, "id") else None,
+            user_discord_id=member.id,
+            severity="medium",
+            category="other",
+            action_taken="timeout",
+            content_snippet=triggered,
+        )
+        studio_sync.log_analytics(
+            event_type="automod_action",
+            event_category="automod",
+            event_name="blacklisted_word_timeout",
+            value={"trigger": triggered, "action": action_taken},
+            success=True,
+            guild_id=str(message.guild.id),
+        )
+
     # ── !strike ───────────────────────────────────────────────────────────────
 
     @commands.command(name="strike")
@@ -227,6 +266,16 @@ class Moderation(commands.Cog, name="Moderation"):
             return
         await log_action(self.bot, "👢 Member Kicked",
             f"**User:** {member.mention} (`{member.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}")
+        studio_sync.log_edit(
+            action_type="kick",
+            action_category="config",
+            target=f"user:{member.id}",
+            after_value={"reason": reason[:200]},
+            triggered_by="moderator",
+            triggered_by_name=str(ctx.author),
+            status="success",
+            guild_id=str(ctx.guild.id),
+        )
         await ctx.send(f"✅ **{member}** has been kicked.", delete_after=15)
 
     # ── !ban ──────────────────────────────────────────────────────────────────
@@ -255,6 +304,16 @@ class Moderation(commands.Cog, name="Moderation"):
             return
         await log_action(self.bot, "🔨 Member Banned",
             f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}")
+        studio_sync.log_edit(
+            action_type="ban",
+            action_category="config",
+            target=f"user:{target.id}",
+            after_value={"reason": reason[:200]},
+            triggered_by="moderator",
+            triggered_by_name=str(ctx.author),
+            status="success",
+            guild_id=str(ctx.guild.id),
+        )
         await ctx.send(f"✅ **{target}** has been banned.", delete_after=15)
 
     # ── !strikes ──────────────────────────────────────────────────────────────
@@ -314,6 +373,16 @@ class Moderation(commands.Cog, name="Moderation"):
         await log_action(self.bot, "🔇 Member Muted",
             f"**User:** {member.mention} (`{member.id}`)\n**Moderator:** {ctx.author.mention}\n"
             f"**Duration:** {minutes}m\n**Reason:** {reason}")
+        studio_sync.log_edit(
+            action_type="mute",
+            action_category="config",
+            target=f"user:{member.id}",
+            after_value={"duration_minutes": minutes, "reason": reason[:200]},
+            triggered_by="moderator",
+            triggered_by_name=str(ctx.author),
+            status="success",
+            guild_id=str(ctx.guild.id),
+        )
         await ctx.send(f"✅ {member.mention} has been muted for **{minutes}** minute(s).", delete_after=15)
 
     # ── !unmute ───────────────────────────────────────────────────────────────
@@ -337,6 +406,15 @@ class Moderation(commands.Cog, name="Moderation"):
             return
         await log_action(self.bot, "🔊 Member Unmuted",
             f"**User:** {member.mention} (`{member.id}`)\n**Moderator:** {ctx.author.mention}", color=0x2ECC71)
+        studio_sync.log_edit(
+            action_type="unmute",
+            action_category="config",
+            target=f"user:{member.id}",
+            triggered_by="moderator",
+            triggered_by_name=str(ctx.author),
+            status="success",
+            guild_id=str(ctx.guild.id),
+        )
         await ctx.send(f"✅ {member.mention} has been unmuted.", delete_after=15)
 
     # ── !warn ─────────────────────────────────────────────────────────────────
@@ -371,6 +449,15 @@ class Moderation(commands.Cog, name="Moderation"):
         await log_action(self.bot, "⚠️ Warning Issued",
             f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n"
             f"**Reason:** {reason}\n**DM Sent:** {'Yes' if dm_sent else 'No (DMs closed)'}", color=0xF0B132)
+        studio_sync.log_automod(
+            guild_id=ctx.guild.id,
+            channel_id=None,
+            user_discord_id=target.id,
+            severity="low",
+            category="other",
+            action_taken="warn",
+            content_snippet=reason[:200],
+        )
         status = "✅" if dm_sent else "⚠️ (DMs closed, warning not delivered)"
         await ctx.send(f"{status} Warning sent to {target.mention}.", delete_after=15)
 
@@ -387,6 +474,16 @@ class Moderation(commands.Cog, name="Moderation"):
         deleted = await ctx.channel.purge(limit=count)
         await log_action(self.bot, "🗑️ Messages Purged",
             f"**Channel:** {ctx.channel.mention}\n**Moderator:** {ctx.author.mention}\n**Count:** {len(deleted)}", color=0x9B59B6)
+        studio_sync.log_edit(
+            action_type="purge",
+            action_category="delete",
+            target=f"channel:{ctx.channel.id}",
+            after_value={"count": len(deleted)},
+            triggered_by="moderator",
+            triggered_by_name=str(ctx.author),
+            status="success",
+            guild_id=str(ctx.guild.id),
+        )
         msg = await ctx.send(f"✅ Deleted **{len(deleted)}** message(s).")
         await discord.utils.sleep_until(discord.utils.utcnow() + datetime.timedelta(seconds=5))
         try:
@@ -403,6 +500,7 @@ class Moderation(commands.Cog, name="Moderation"):
         if seconds < 0 or seconds > 21600:
             await ctx.send("❌ Slowmode must be between 0 and 21600 seconds.", delete_after=10)
             return
+        before = ctx.channel.slowmode_delay
         await ctx.channel.edit(slowmode_delay=seconds)
         if seconds == 0:
             await ctx.send("✅ Slowmode disabled.", delete_after=10)
@@ -410,6 +508,17 @@ class Moderation(commands.Cog, name="Moderation"):
             await ctx.send(f"✅ Slowmode set to **{seconds}s**.", delete_after=10)
         await log_action(self.bot, "⏱️ Slowmode Changed",
             f"**Channel:** {ctx.channel.mention}\n**Moderator:** {ctx.author.mention}\n**Delay:** {seconds}s", color=0x3498DB)
+        studio_sync.log_edit(
+            action_type="slowmode",
+            action_category="edit",
+            target=f"channel:{ctx.channel.id}",
+            before_value={"slowmode": before},
+            after_value={"slowmode": seconds},
+            triggered_by="moderator",
+            triggered_by_name=str(ctx.author),
+            status="success",
+            guild_id=str(ctx.guild.id),
+        )
 
     # ── !lock ─────────────────────────────────────────────────────────────────
 
@@ -430,6 +539,16 @@ class Moderation(commands.Cog, name="Moderation"):
             await ctx.send(f"✅ {ch.mention} has been locked.", delete_after=10)
         await log_action(self.bot, "🔒 Channel Locked",
             f"**Channel:** {ch.mention}\n**Moderator:** {ctx.author.mention}")
+        studio_sync.log_edit(
+            action_type="lock_channel",
+            action_category="permission",
+            target=f"channel:{ch.id}",
+            after_value={"send_messages": False},
+            triggered_by="moderator",
+            triggered_by_name=str(ctx.author),
+            status="success",
+            guild_id=str(ctx.guild.id),
+        )
 
     # ── !unlock ───────────────────────────────────────────────────────────────
 
@@ -450,6 +569,16 @@ class Moderation(commands.Cog, name="Moderation"):
             await ctx.send(f"✅ {ch.mention} has been unlocked.", delete_after=10)
         await log_action(self.bot, "🔓 Channel Unlocked",
             f"**Channel:** {ch.mention}\n**Moderator:** {ctx.author.mention}", color=0x2ECC71)
+        studio_sync.log_edit(
+            action_type="unlock_channel",
+            action_category="permission",
+            target=f"channel:{ch.id}",
+            after_value={"send_messages": None},
+            triggered_by="moderator",
+            triggered_by_name=str(ctx.author),
+            status="success",
+            guild_id=str(ctx.guild.id),
+        )
 
     # ── Error handlers ────────────────────────────────────────────────────────
 
