@@ -7,6 +7,7 @@ Tries providers in order until one succeeds:
   3. OpenRouter (OpenAI-compatible REST, native tool calling on select models)
   4. Hugging Face (Inference API REST, text-based calling)
   5. Cerebras (OpenAI-compatible REST, native tool calling)
+  6. Fireworks (OpenAI-compatible REST, native tool calling)
 """
 from __future__ import annotations
 
@@ -30,6 +31,8 @@ from config import (
     OPENROUTER_API_KEY,
     OPENROUTER_URL,
     HUGGINGFACE_API_KEY,
+    FIREWORKS_API_KEY,
+    FIREWORKS_URL,
 )
 
 log = logging.getLogger("vyrion.ai_providers")
@@ -193,23 +196,6 @@ async def generate(
     max_tokens: int = 200,
     image_parts: list[tuple[bytes, str]] | None = None,
 ) -> str:
-    text, _, _ = await generate_with_meta(
-        system_prompt, messages,
-        temperature=temperature, max_tokens=max_tokens,
-        image_parts=image_parts,
-    )
-    return text
-
-
-async def generate_with_meta(
-    system_prompt: str,
-    messages: list[dict],
-    *,
-    temperature: float = 0.8,
-    max_tokens: int = 200,
-    image_parts: list[tuple[bytes, str]] | None = None,
-) -> tuple[str, str | None, str | None]:
-    """Like generate() but also returns (provider, model) used for analytics."""
     if GEMINI_API_KEY:
         text = await _gemini_generate(
             system_prompt, messages,
@@ -217,7 +203,7 @@ async def generate_with_meta(
             image_parts=image_parts,
         )
         if text:
-            return text, "gemini", getattr(config, "ACTIVE_GEMINI_MODEL", GEMINI_MODEL)
+            return text
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
     if GROQ_API_KEY:
         active_groq = getattr(config, "ACTIVE_GROQ_MODEL", config.GROQ_MODELS[0])
@@ -228,7 +214,7 @@ async def generate_with_meta(
                 temperature=temperature, max_tokens=max_tokens,
             )
             if text:
-                return text, "groq", model
+                return text
     if OPENROUTER_API_KEY:
         active_or = getattr(config, "ACTIVE_OPENROUTER_MODEL", config.OPENROUTER_MODELS[0])
         or_models = [active_or] + [m for m in config.OPENROUTER_MODELS if m != active_or]
@@ -238,7 +224,7 @@ async def generate_with_meta(
                 temperature=temperature, max_tokens=max_tokens,
             )
             if text:
-                return text, "openrouter", model
+                return text
     if HUGGINGFACE_API_KEY:
         active_hf = getattr(config, "ACTIVE_HF_MODEL", config.HUGGINGFACE_MODELS[0])
         hf_models = [active_hf] + [m for m in config.HUGGINGFACE_MODELS if m != active_hf]
@@ -248,7 +234,7 @@ async def generate_with_meta(
                 temperature=temperature, max_tokens=max_tokens,
             )
             if text:
-                return text, "huggingface", model
+                return text
     if CEREBRAS_API_KEY:
         active_cb = getattr(config, "ACTIVE_CEREBRAS_MODEL", config.CEREBRAS_MODELS[0])
         cb_models = [active_cb] + [m for m in config.CEREBRAS_MODELS if m != active_cb]
@@ -258,8 +244,18 @@ async def generate_with_meta(
                 temperature=temperature, max_tokens=max_tokens,
             )
             if text:
-                return text, "cerebras", model
-    return "I'm having trouble responding right now. Try again in a moment.", None, None
+                return text
+    if FIREWORKS_API_KEY:
+        active_fw = getattr(config, "ACTIVE_FIREWORKS_MODEL", config.FIREWORKS_MODELS[0])
+        fw_models = [active_fw] + [m for m in config.FIREWORKS_MODELS if m != active_fw]
+        for model in fw_models:
+            text = await _openai_compat_chat(
+                FIREWORKS_URL, FIREWORKS_API_KEY, model, rest_messages,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            if text:
+                return text
+    return "I'm having trouble responding right now. Try again in a moment."
 
 
 async def gemini_function_call(
@@ -307,13 +303,7 @@ async def openai_function_call(
     *,
     temperature: float = 0.4,
     max_tokens: int = 2000,
-    force_tools: bool = False,
 ) -> dict | None:
-    """
-    Call an OpenAI-compatible endpoint with native tool calling.
-    If force_tools=True, uses tool_choice='required' to force function calls.
-    This prevents the AI from returning text like 'Working on it...' instead of actually calling functions.
-    """
     rest_messages = [{"role": "system", "content": system_prompt}] + messages
     openai_tools = [{"type": "function", "function": t} for t in tools_json]
     providers = []
@@ -326,6 +316,9 @@ async def openai_function_call(
     if CEREBRAS_API_KEY:
         for m in config.CEREBRAS_TOOL_MODELS:
             providers.append((CEREBRAS_URL, CEREBRAS_API_KEY, m))
+    if FIREWORKS_API_KEY:
+        for m in config.FIREWORKS_TOOL_MODELS:
+            providers.append((FIREWORKS_URL, FIREWORKS_API_KEY, m))
     for url, key, model in providers:
         headers = {
             "Authorization": f"Bearer {key}",
@@ -335,7 +328,7 @@ async def openai_function_call(
             "model": model,
             "messages": rest_messages,
             "tools": openai_tools,
-            "tool_choice": "required" if force_tools else "auto",
+            "tool_choice": "auto",
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
@@ -431,6 +424,14 @@ async def text_function_call(
             )
             if text:
                 break
+    if not text and FIREWORKS_API_KEY:
+        for model in config.FIREWORKS_MODELS:
+            text = await _openai_compat_chat(
+                FIREWORKS_URL, FIREWORKS_API_KEY, model, rest_messages,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+            if text:
+                break
     if not text:
         return None
     json_blocks = re.findall(r'```(?:json)?\s*(\[.*?\])\s*```', text, re.DOTALL)
@@ -452,4 +453,4 @@ async def text_function_call(
 
 
 def is_any_provider_available() -> bool:
-    return bool(GEMINI_API_KEY or GROQ_API_KEY or OPENROUTER_API_KEY or CEREBRAS_API_KEY or HUGGINGFACE_API_KEY)
+    return bool(GEMINI_API_KEY or GROQ_API_KEY or OPENROUTER_API_KEY or CEREBRAS_API_KEY or HUGGINGFACE_API_KEY or FIREWORKS_API_KEY)
