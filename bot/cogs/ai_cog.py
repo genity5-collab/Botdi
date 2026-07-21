@@ -219,7 +219,7 @@ async def _generate(
     sys_prompt += _ROBLOX_TOOL_HINT
 
     messages: list[dict] = []
-    for m in history[-30:]:
+    for m in history[-60:]:
         messages.append({"role": m["role"] if m["role"] in ("user", "assistant") else "user", "content": m["content"]})
     messages.append({"role": "user", "content": user_text})
 
