@@ -9,7 +9,7 @@ components, and more.
 
 Permissions:
   - Bot owner: infinite usage
-  - Guild owner (server owner): 2 uses per week
+  - Guild owner (server owner): 5 uses per week
   - Administrators: NOT allowed
 
 API errors are never shown to the user.
@@ -34,22 +34,7 @@ from config import (
     LOG_CHANNEL_ID, BOT_COLOR, COLOR_OK, COLOR_ERR, BOT_OWNER_ID, BOT_NAME,
     SUBAGENT_RATE_LIMIT, SUBAGENT_RATE_WINDOW,
 )
-import data_store
-from data_store import (
-    check_subagent_rate_limit,
-    get_always_allow_deletes,
-    add_action_history,
-    create_ticket_panel,
-    create_application, add_application_submission, list_applications,
-    create_giveaway, end_giveaway, list_giveaways,
-    set_autorole, get_autorole,
-    set_welcome, get_welcome,
-    set_suggestion_channel,
-    set_verification, get_verification,
-    save_snapshot, list_snapshots, get_snapshot,
-    set_automation, list_automation, remove_automation,
-    add_scheduled_action, list_scheduled_actions, remove_scheduled_action,
-)
+from data_store import check_subagent_rate_limit
 from utils import log_action, sanitize_ai_output
 import ai_providers
 
@@ -143,13 +128,6 @@ For send_message, send_embed, send_poll, send_button_embed, send_game, send_gif:
 32. When creating channels, the system automatically sets @everyone permissions (view, send, read history for text; view, connect, speak for voice). You only need to call set_channel_permissions if you want to RESTRICT access further.
 33. When polishing channels, add emoji decorations to names and topics. Make announcements visually appealing with rich embeds (colors, fields, thumbnails, footers). Use send_gif to add visual flair.
 34. When the user says "go to general and send a message", call send_message with channel_name="general". If they don't specify a channel at all, omit channel_name and the system uses the current channel.
-35. You can create complete support systems: ticket panels (create_ticket_panel), application forms (create_application_form), giveaways (start_giveaway), verification systems (set_verification), auto-role (set_autorole), welcome/goodbye messages (set_welcome), suggestion channels (set_suggestion_channel), and automation triggers (set_automation).
-36. You can save and restore server snapshots: save_server_snapshot captures the full server structure, restore_server_snapshot rebuilds missing channels/roles/categories from a snapshot.
-37. You can schedule recurring messages: add_scheduled_action posts a message on a specific day of the week at a given time (UTC), or daily. Use list_scheduled to see them and remove_scheduled to delete one.
-38. You can set automation triggers: set_automation with trigger="member_join" to automatically give a role and/or send a message when someone joins, or trigger="member_leave" for when someone leaves.
-39. You can toggle always-allow-deletes with set_always_allow_deletes. When ON, delete confirmations are bypassed — channels, roles, and events are deleted immediately without asking. Use this when the user says "always allow deletes" or "don't ask me to confirm deletions".
-40. When the user asks to "create a complete support system" or "set up my server", chain multiple calls together: create categories, channels, roles, ticket panels, verification, welcome messages, and automation all in one request.
-41. All actions are recorded in action history automatically, enabling the /undo-last command to reverse the last create/delete action.
 
 ## EXAMPLES
 
@@ -285,7 +263,7 @@ def _get_role_perms(role_name: str, explicit_perms: str = "") -> str:
     return "view_channel,send_messages,read_message_history"
 
 
-# ── Tool declarations (Gemini) ───────────────────────────────────────────────
+# ── Tool declarations ─────────────────────────────────────────────────────────
 
 def _build_tools() -> list:
     if genai_types is None:
@@ -396,7 +374,7 @@ def _build_tools() -> list:
         decl("set_channel_topic", "Set the topic of a text channel.", {
             "channel_name": {"type": "string"}, "topic": {"type": "string"},
         }, ["channel_name", "topic"]),
-        decl("delete_channel", "Delete a channel by name. User will be asked to confirm unless always-allow-deletes is on.", {
+        decl("delete_channel", "Delete a channel by name. User will be asked to confirm.", {
             "channel_name": {"type": "string"},
         }, ["channel_name"]),
         decl("create_scheduled_event", "Create a scheduled event in the server.", {
@@ -408,7 +386,7 @@ def _build_tools() -> list:
             "event_name": {"type": "string"}, "new_name": {"type": "string"},
             "new_description": {"type": "string"}, "new_start_time": {"type": "string"},
         }, ["event_name"]),
-        decl("delete_scheduled_event", "Delete a scheduled event by name. User will be asked to confirm unless always-allow-deletes is on.", {
+        decl("delete_scheduled_event", "Delete a scheduled event by name. User will be asked to confirm.", {
             "event_name": {"type": "string"},
         }, ["event_name"]),
         decl("create_forum_channel", "Create a forum channel.", {
@@ -439,7 +417,7 @@ def _build_tools() -> list:
             "role_name": {"type": "string"}, "new_name": {"type": "string"}, "color": {"type": "string"},
             "permissions": {"type": "string"}, "hoist": {"type": "boolean"}, "mentionable": {"type": "boolean"},
         }, ["role_name"]),
-        decl("delete_role", "Delete a role by name. User will be asked to confirm unless always-allow-deletes is on.", {
+        decl("delete_role", "Delete a role by name. User will be asked to confirm.", {
             "role_name": {"type": "string"},
         }, ["role_name"]),
         decl("reorder_channel", "Move a channel to a different category or reorder it.", {
@@ -454,51 +432,8 @@ def _build_tools() -> list:
         decl("send_gif", "Search and send a GIF. If channel_name is omitted, sends in the current channel. Use for adding visual flair to announcements and messages.", {
             "channel_name": {"type": "string", "description": "Target channel name. If omitted, uses current channel."}, "query": {"type": "string"},
         }, ["query"]),
-        decl("create_ticket_panel", "Create a ticket panel with category buttons in a channel. Users click a button to open a private ticket channel.", {
-            "channel_name": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"},
-            "categories": {"type": "array", "items": {"type": "string"}, "description": "1-5 category names"},
-        }, ["channel_name", "title", "description", "categories"]),
-        decl("set_autorole", "Configure auto-role: automatically assign roles when a member joins.", {
-            "enabled": {"type": "boolean"}, "role_names": {"type": "array", "items": {"type": "string"}},
-        }, ["enabled", "role_names"]),
-        decl("set_welcome", "Configure welcome/goodbye messages. Placeholders: {user}, {server}, {count}.", {
-            "enabled": {"type": "boolean"}, "channel_name": {"type": "string"}, "message": {"type": "string"},
-            "goodbye_channel_name": {"type": "string"}, "goodbye_message": {"type": "string"},
-        }, ["enabled", "channel_name", "message"]),
-        decl("set_suggestion_channel", "Set the channel where suggestions are posted.", {"channel_name": {"type": "string"}}, ["channel_name"]),
-        decl("create_application_form", "Create an application form with questions. Users click a button to fill it out.", {
-            "name": {"type": "string"}, "description": {"type": "string"},
-            "questions": {"type": "array", "items": {"type": "string"}}, "channel_name": {"type": "string"},
-        }, ["name", "description", "questions", "channel_name"]),
-        decl("start_giveaway", "Start a giveaway with a button to enter. Winners auto-picked at end.", {
-            "channel_name": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"},
-            "prize": {"type": "string"}, "duration_minutes": {"type": "integer"}, "winners": {"type": "integer"},
-        }, ["channel_name", "title", "prize", "duration_minutes", "winners"]),
-        decl("set_verification", "Set up verification: users click a button to get a role.", {
-            "enabled": {"type": "boolean"}, "role_name": {"type": "string"}, "channel_name": {"type": "string"}, "message": {"type": "string"},
-        }, ["enabled", "role_name", "channel_name", "message"]),
-        decl("save_server_snapshot", "Save a snapshot of server structure (channels, roles, categories).", {"name": {"type": "string"}}, ["name"]),
-        decl("restore_server_snapshot", "Restore channels and roles from a snapshot. Only creates missing items.", {"snapshot_id": {"type": "string"}}, ["snapshot_id"]),
-        decl("list_snapshots", "List all saved server snapshots.", {}, []),
-        decl("set_automation", "Set automation trigger: perform actions when events happen (member_join/member_leave).", {
-            "trigger": {"type": "string", "description": "'member_join' or 'member_leave'"},
-            "role_name": {"type": "string", "description": "Role to assign (member_join). 'none' to skip"},
-            "message": {"type": "string"}, "channel_name": {"type": "string"},
-        }, ["trigger", "message"]),
-        decl("add_scheduled_action", "Schedule a recurring message (e.g. post every Friday).", {
-            "channel_name": {"type": "string"}, "content": {"type": "string"},
-            "day": {"type": "string", "description": "monday...sunday or 'daily'"},
-            "hour": {"type": "integer"}, "minute": {"type": "integer"},
-        }, ["channel_name", "content", "day", "hour", "minute"]),
-        decl("list_scheduled", "List all scheduled recurring actions.", {}, []),
-        decl("remove_scheduled", "Remove a scheduled action by ID.", {"sched_id": {"type": "string"}}, ["sched_id"]),
-        decl("set_always_allow_deletes", "Toggle bypassing delete confirmations. When ON, channels/roles/events delete immediately without asking.", {
-            "enabled": {"type": "boolean"},
-        }, ["enabled"]),
     ])]
 
-
-# ── Tool declarations (OpenAI/text) ───────────────────────────────────────────
 
 def _build_tools_json() -> list[dict]:
     def t(name, desc, props, required):
@@ -525,10 +460,10 @@ def _build_tools_json() -> list[dict]:
         t("rename_channel", "Rename a channel.", {"current_name": {"type": "string"}, "new_name": {"type": "string"}}, ["current_name", "new_name"]),
         t("set_slowmode", "Set slowmode on a text channel.", {"channel_name": {"type": "string"}, "seconds": {"type": "integer"}}, ["channel_name", "seconds"]),
         t("set_channel_topic", "Set the topic of a text channel.", {"channel_name": {"type": "string"}, "topic": {"type": "string"}}, ["channel_name", "topic"]),
-        t("delete_channel", "Delete a channel. User confirms unless always-allow-deletes is on.", {"channel_name": {"type": "string"}}, ["channel_name"]),
+        t("delete_channel", "Delete a channel. User confirms.", {"channel_name": {"type": "string"}}, ["channel_name"]),
         t("create_scheduled_event", "Create a scheduled event.", {"name": {"type": "string"}, "description": {"type": "string"}, "start_time": {"type": "string"}, "end_time": {"type": "string"}, "channel_name": {"type": "string"}, "location": {"type": "string"}}, ["name", "start_time"]),
         t("edit_scheduled_event", "Edit a scheduled event.", {"event_name": {"type": "string"}, "new_name": {"type": "string"}, "new_description": {"type": "string"}, "new_start_time": {"type": "string"}}, ["event_name"]),
-        t("delete_scheduled_event", "Delete a scheduled event. User confirms unless always-allow-deletes is on.", {"event_name": {"type": "string"}}, ["event_name"]),
+        t("delete_scheduled_event", "Delete a scheduled event. User confirms.", {"event_name": {"type": "string"}}, ["event_name"]),
         t("create_forum_channel", "Create a forum channel.", {"name": {"type": "string"}, "category": {"type": "string"}, "topic": {"type": "string"}}, ["name"]),
         t("create_announcement_channel", "Create an announcement channel.", {"name": {"type": "string"}, "category": {"type": "string"}, "topic": {"type": "string"}}, ["name"]),
         t("create_stage_channel", "Create a stage channel.", {"name": {"type": "string"}, "category": {"type": "string"}}, ["name"]),
@@ -538,26 +473,11 @@ def _build_tools_json() -> list[dict]:
         t("timeout_member", "Timeout a member.", {"user": {"type": "string"}, "minutes": {"type": "integer"}, "reason": {"type": "string"}}, ["user", "minutes"]),
         t("send_dm", "Send a DM to a member.", {"user": {"type": "string"}, "content": {"type": "string"}}, ["user", "content"]),
         t("edit_role", "Edit an existing role.", {"role_name": {"type": "string"}, "new_name": {"type": "string"}, "color": {"type": "string"}, "permissions": {"type": "string"}, "hoist": {"type": "boolean"}, "mentionable": {"type": "boolean"}}, ["role_name"]),
-        t("delete_role", "Delete a role. User confirms unless always-allow-deletes is on.", {"role_name": {"type": "string"}}, ["role_name"]),
+        t("delete_role", "Delete a role. User confirms.", {"role_name": {"type": "string"}}, ["role_name"]),
         t("reorder_channel", "Move a channel to a different category.", {"channel_name": {"type": "string"}, "category": {"type": "string"}, "position": {"type": "integer"}}, ["channel_name"]),
         t("read_logs", "Read recent bot logs.", {"count": {"type": "integer"}, "level": {"type": "string"}}, []),
         t("edit_bot_message", "Edit a bot message.", {"message_id": {"type": "string"}, "channel_name": {"type": "string"}, "new_content": {"type": "string"}}, ["message_id", "channel_name", "new_content"]),
         t("send_gif", "Search and send a GIF. If channel_name omitted, uses current channel.", {"channel_name": {"type": "string"}, "query": {"type": "string"}}, ["query"]),
-        t("create_ticket_panel", "Create a ticket panel with category buttons.", {"channel_name": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "categories": {"type": "array", "items": {"type": "string"}}}, ["channel_name", "title", "description", "categories"]),
-        t("set_autorole", "Configure auto-role on join.", {"enabled": {"type": "boolean"}, "role_names": {"type": "array", "items": {"type": "string"}}}, ["enabled", "role_names"]),
-        t("set_welcome", "Configure welcome/goodbye messages.", {"enabled": {"type": "boolean"}, "channel_name": {"type": "string"}, "message": {"type": "string"}, "goodbye_channel_name": {"type": "string"}, "goodbye_message": {"type": "string"}}, ["enabled", "channel_name", "message"]),
-        t("set_suggestion_channel", "Set the suggestions channel.", {"channel_name": {"type": "string"}}, ["channel_name"]),
-        t("create_application_form", "Create an application form.", {"name": {"type": "string"}, "description": {"type": "string"}, "questions": {"type": "array", "items": {"type": "string"}}, "channel_name": {"type": "string"}}, ["name", "description", "questions", "channel_name"]),
-        t("start_giveaway", "Start a giveaway.", {"channel_name": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "prize": {"type": "string"}, "duration_minutes": {"type": "integer"}, "winners": {"type": "integer"}}, ["channel_name", "title", "prize", "duration_minutes", "winners"]),
-        t("set_verification", "Set up verification system.", {"enabled": {"type": "boolean"}, "role_name": {"type": "string"}, "channel_name": {"type": "string"}, "message": {"type": "string"}}, ["enabled", "role_name", "channel_name", "message"]),
-        t("save_server_snapshot", "Save server structure snapshot.", {"name": {"type": "string"}}, ["name"]),
-        t("restore_server_snapshot", "Restore from snapshot.", {"snapshot_id": {"type": "string"}}, ["snapshot_id"]),
-        t("list_snapshots", "List all snapshots.", {}, []),
-        t("set_automation", "Set automation trigger.", {"trigger": {"type": "string"}, "role_name": {"type": "string"}, "message": {"type": "string"}, "channel_name": {"type": "string"}}, ["trigger", "message"]),
-        t("add_scheduled_action", "Schedule a recurring message.", {"channel_name": {"type": "string"}, "content": {"type": "string"}, "day": {"type": "string"}, "hour": {"type": "integer"}, "minute": {"type": "integer"}}, ["channel_name", "content", "day", "hour", "minute"]),
-        t("list_scheduled", "List scheduled actions.", {}, []),
-        t("remove_scheduled", "Remove a scheduled action.", {"sched_id": {"type": "string"}}, ["sched_id"]),
-        t("set_always_allow_deletes", "Toggle bypassing delete confirmations.", {"enabled": {"type": "boolean"}}, ["enabled"]),
     ]
 
 
@@ -627,6 +547,10 @@ def _find_event(guild: discord.Guild, name: str) -> discord.ScheduledEvent | Non
     return event_map[matches[0]] if matches else None
 
 
+def _find_similar_event(guild: discord.Guild, name: str) -> discord.ScheduledEvent | None:
+    return _find_event(guild, name)
+
+
 GIPHY_BETA_KEY = "dc6zaTOxFJmzC"
 
 
@@ -647,6 +571,7 @@ async def _search_gif(query: str) -> str | None:
 
 
 async def _web_search(query: str, max_results: int = 5) -> str:
+    """Search the web using DuckDuckGo's HTML endpoint and return summarized results."""
     url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -669,6 +594,7 @@ async def _web_search(query: str, max_results: int = 5) -> str:
 
 
 async def _wikipedia_lookup(query: str) -> str:
+    """Look up a topic on Wikipedia and return a summary."""
     url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{query.replace(' ', '_')}"
     try:
         async with aiohttp.ClientSession() as session:
@@ -1002,7 +928,7 @@ class Subagent(commands.Cog, name="Subagent"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="subagent", description="Ask the AI to perform Discord actions (server owners only, 2/week)")
+    @app_commands.command(name="subagent", description="Ask the AI to perform Discord actions (server owners only, 5/week)")
     @app_commands.describe(prompt="What should the AI do? e.g. 'Create a channel for @youtuber role only to chat'")
     async def subagent(self, interaction: discord.Interaction, prompt: str) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -1034,6 +960,7 @@ class Subagent(commands.Cog, name="Subagent"):
         guild = interaction.guild
         edit_log: list[str] = []
 
+        # Send initial status embed (will be edited live as actions complete)
         status_embed = discord.Embed(title=f"🤖 {BOT_NAME} Subagent", color=BOT_COLOR)
         status_embed.add_field(name="Request", value=prompt[:1024], inline=False)
         status_embed.add_field(name="Status", value="⏳ Working on it...", inline=False)
@@ -1041,6 +968,7 @@ class Subagent(commands.Cog, name="Subagent"):
         status_msg = await interaction.followup.send(embed=status_embed, ephemeral=True)
 
         async def _update_live_log() -> None:
+            """Edit the status embed to show live progress."""
             embed = discord.Embed(title=f"🤖 {BOT_NAME} Subagent", color=BOT_COLOR)
             embed.add_field(name="Request", value=prompt[:1024], inline=False)
             if edit_log:
@@ -1056,13 +984,12 @@ class Subagent(commands.Cog, name="Subagent"):
                 pass
 
         async def _confirm(prompt_text: str) -> bool:
-            if await get_always_allow_deletes(guild.id):
-                return True
             view = ConfirmView(interaction.user.id, timeout=30)
             await interaction.followup.send(prompt_text, view=view, ephemeral=True)
             await view.wait()
             return view.result is True
 
+        # Build richer server context
         channels_info = []
         for ch in guild.channels[:50]:
             ch_type = type(ch).__name__.replace("Channel", "").lower()
@@ -1098,6 +1025,7 @@ class Subagent(commands.Cog, name="Subagent"):
                         return entry
                     category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
                     ch = await guild.create_text_channel(args["name"], category=category, topic=args.get("topic"))
+                    # Auto-set @everyone permissions: view, send, read history
                     try:
                         overwrite = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
                         await ch.set_permissions(guild.default_role, overwrite=overwrite)
@@ -1105,7 +1033,6 @@ class Subagent(commands.Cog, name="Subagent"):
                         pass
                     entry = f"Created text channel #{ch.name} (with default @everyone permissions)"
                     edit_log.append(entry); _add_changelog_entry("create_text_channel", entry)
-                    await add_action_history(guild.id, "create_text_channel", entry, {"name": ch.name})
                     await _update_live_log()
                     return entry
 
@@ -1118,6 +1045,7 @@ class Subagent(commands.Cog, name="Subagent"):
                         return entry
                     category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
                     ch = await guild.create_voice_channel(args["name"], category=category, user_limit=args.get("user_limit", 0))
+                    # Auto-set @everyone permissions: view, connect, speak
                     try:
                         overwrite = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
                         await ch.set_permissions(guild.default_role, overwrite=overwrite)
@@ -1125,7 +1053,6 @@ class Subagent(commands.Cog, name="Subagent"):
                         pass
                     entry = f"Created voice channel 🔊 {ch.name} (with default @everyone permissions)"
                     edit_log.append(entry); _add_changelog_entry("create_voice_channel", entry)
-                    await add_action_history(guild.id, "create_voice_channel", entry, {"name": ch.name})
                     await _update_live_log()
                     return entry
 
@@ -1139,7 +1066,6 @@ class Subagent(commands.Cog, name="Subagent"):
                     cat = await guild.create_category(args["name"])
                     entry = f"Created category 📁 {cat.name}"
                     edit_log.append(entry); _add_changelog_entry("create_category", entry)
-                    await add_action_history(guild.id, "create_category", entry, {"name": cat.name})
                     await _update_live_log()
                     return entry
 
@@ -1162,7 +1088,6 @@ class Subagent(commands.Cog, name="Subagent"):
                     )
                     entry = f"Created role @{role.name} with permissions: {perm_str}"
                     edit_log.append(entry); _add_changelog_entry("create_role", entry)
-                    await add_action_history(guild.id, "create_role", entry, {"name": role.name})
                     await _update_live_log()
                     return entry
 
@@ -1393,7 +1318,6 @@ class Subagent(commands.Cog, name="Subagent"):
                     await ch.delete()
                     entry = f"Deleted channel #{chname}"
                     edit_log.append(entry); _add_changelog_entry("delete_channel", entry)
-                    await add_action_history(guild.id, "delete_channel", entry)
                     await _update_live_log()
                     return entry
 
@@ -1428,7 +1352,6 @@ class Subagent(commands.Cog, name="Subagent"):
                     event = await guild.create_scheduled_event(**kwargs)
                     entry = f"Created event '{event.name}' starting {start_dt.isoformat()}"
                     edit_log.append(entry); _add_changelog_entry("create_scheduled_event", entry)
-                    await add_action_history(guild.id, "create_scheduled_event", entry, {"name": event.name})
                     await _update_live_log()
                     return entry
 
@@ -1462,7 +1385,6 @@ class Subagent(commands.Cog, name="Subagent"):
                     await event.delete()
                     entry = f"Deleted event '{args['event_name']}'"
                     edit_log.append(entry); _add_changelog_entry("delete_scheduled_event", entry)
-                    await add_action_history(guild.id, "delete_scheduled_event", entry)
                     await _update_live_log()
                     return entry
 
@@ -1617,7 +1539,6 @@ class Subagent(commands.Cog, name="Subagent"):
                     await role.delete()
                     entry = f"Deleted role @{rname}"
                     edit_log.append(entry); _add_changelog_entry("delete_role", entry)
-                    await add_action_history(guild.id, "delete_role", entry)
                     await _update_live_log()
                     return entry
 
@@ -1725,7 +1646,8 @@ class Subagent(commands.Cog, name="Subagent"):
                     for ch in guild.voice_channels:
                         if ch.category is None:
                             lines.append(f"🔊 {ch.name} (voice, no category)")
-                    return "\n".join(lines)[:1500]
+                    result = "\n".join(lines)
+                    return result[:1500]
 
                 if name == "list_roles":
                     lines = []
@@ -1748,7 +1670,8 @@ class Subagent(commands.Cog, name="Subagent"):
                             perms.append("manage_channels")
                         perm_str = f" [{', '.join(perms)}]" if perms else ""
                         lines.append(f"@{r.name} (id:{r.id}, pos:{r.position}, color:#{r.color.value:06X}){perm_str}")
-                    return "\n".join(lines)[:1500]
+                    result = "\n".join(lines)
+                    return result[:1500]
 
                 if name == "list_events":
                     lines = []
@@ -1757,7 +1680,8 @@ class Subagent(commands.Cog, name="Subagent"):
                         lines.append(f"📅 {e.name} (status:{status}, starts:{e.start_time.isoformat() if e.start_time else 'N/A'})")
                     if not lines:
                         return "No scheduled events found."
-                    return "\n".join(lines)[:1500]
+                    result = "\n".join(lines)
+                    return result[:1500]
 
                 if name == "web_search":
                     result = await _web_search(args["query"])
@@ -1772,259 +1696,6 @@ class Subagent(commands.Cog, name="Subagent"):
                     edit_log.append(entry); _add_changelog_entry("wikipedia_lookup", entry)
                     await _update_live_log()
                     return result[:1500]
-
-                if name == "create_ticket_panel":
-                    ch = _find_channel(guild, args["channel_name"])
-                    if not ch or not isinstance(ch, discord.TextChannel):
-                        return f"Channel '{args['channel_name']}' not found."
-                    cats = args.get("categories", [])
-                    if not cats or len(cats) > 5:
-                        return "Need 1-5 categories."
-                    import secrets
-                    panel_id = secrets.token_hex(3)
-                    from .systems import TicketPanelView
-                    await data_store.create_ticket_panel(guild.id, panel_id, ch.id, args["title"], args["description"], cats)
-                    embed = discord.Embed(title=args["title"], description=args["description"], color=BOT_COLOR)
-                    embed.set_footer(text=f"Panel ID: {panel_id}")
-                    view = TicketPanelView(panel_id, cats)
-                    msg = await ch.send(embed=embed, view=view)
-                    await data_store.set_panel_message_id(guild.id, panel_id, msg.id)
-                    entry = f"Created ticket panel '{args['title']}' in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("create_ticket_panel", entry)
-                    await add_action_history(guild.id, "create_ticket_panel", entry, {"panel_id": panel_id})
-                    await _update_live_log()
-                    return entry
-
-                if name == "set_autorole":
-                    role_ids = []
-                    for rn in args.get("role_names", []):
-                        r = _find_role(guild, rn)
-                        if r:
-                            role_ids.append(r.id)
-                    await data_store.set_autorole(guild.id, args["enabled"], role_ids)
-                    entry = f"Set autorole: enabled={args['enabled']}, {len(role_ids)} roles"
-                    edit_log.append(entry); _add_changelog_entry("set_autorole", entry)
-                    await add_action_history(guild.id, "set_autorole", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "set_welcome":
-                    ch = _find_channel(guild, args["channel_name"])
-                    if not ch:
-                        return f"Channel '{args['channel_name']}' not found."
-                    gch_id = None
-                    if args.get("goodbye_channel_name"):
-                        gch = _find_channel(guild, args["goodbye_channel_name"])
-                        gch_id = gch.id if gch else None
-                    await data_store.set_welcome(guild.id, args["enabled"], ch.id, args["message"], gch_id or ch.id, args.get("goodbye_message", ""))
-                    entry = f"Set welcome/goodbye in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("set_welcome", entry)
-                    await add_action_history(guild.id, "set_welcome", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "set_suggestion_channel":
-                    ch = _find_channel(guild, args["channel_name"])
-                    if not ch:
-                        return f"Channel '{args['channel_name']}' not found."
-                    await data_store.set_suggestion_channel(guild.id, ch.id)
-                    entry = f"Set suggestion channel to #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("set_suggestion_channel", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "create_application_form":
-                    ch = _find_channel(guild, args["channel_name"])
-                    if not ch or not isinstance(ch, discord.TextChannel):
-                        return f"Channel '{args['channel_name']}' not found."
-                    qs = args.get("questions", [])
-                    if not qs or len(qs) > 5:
-                        return "Need 1-5 questions."
-                    import secrets
-                    app_id = secrets.token_hex(3)
-                    await data_store.create_application(guild.id, app_id, args["name"], args["description"], qs, ch.id)
-                    from .systems import ApplicationView
-                    embed = discord.Embed(title=f"📝 {args['name']}", description=args["description"], color=BOT_COLOR)
-                    embed.add_field(name="Questions", value="\n".join(f"{i+1}. {q}" for i, q in enumerate(qs)), inline=False)
-                    embed.set_footer(text=f"App ID: {app_id}")
-                    view = ApplicationView(app_id, qs)
-                    msg = await ch.send(embed=embed, view=view)
-                    await data_store.set_application_message_id(guild.id, app_id, msg.id)
-                    entry = f"Created application form '{args['name']}' in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("create_application_form", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "start_giveaway":
-                    ch = _find_channel(guild, args["channel_name"])
-                    if not ch or not isinstance(ch, discord.TextChannel):
-                        return f"Channel '{args['channel_name']}' not found."
-                    import secrets
-                    gid = secrets.token_hex(3)
-                    gw = await data_store.create_giveaway(guild.id, gid, ch.id, args["title"], args.get("description", ""), args["prize"], args["duration_minutes"], args.get("winners", 1))
-                    from .systems import GiveawayView
-                    embed = discord.Embed(title=f"🎉 {args['title']}", description=args.get("description", ""), color=COLOR_OK)
-                    embed.add_field(name="Prize", value=args["prize"], inline=False)
-                    embed.add_field(name="Winners", value=str(args.get("winners", 1)), inline=True)
-                    embed.add_field(name="Ends", value=f"<t:{gw['end_ts']}:R>", inline=True)
-                    embed.set_footer(text=f"Giveaway ID: {gid}")
-                    view = GiveawayView(gid)
-                    msg = await ch.send(embed=embed, view=view)
-                    await data_store.set_giveaway_message_id(guild.id, gid, msg.id)
-                    entry = f"Started giveaway '{args['title']}' in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("start_giveaway", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "set_verification":
-                    role = _find_role(guild, args["role_name"])
-                    if not role:
-                        return f"Role '{args['role_name']}' not found."
-                    ch = _find_channel(guild, args["channel_name"])
-                    if not ch or not isinstance(ch, discord.TextChannel):
-                        return f"Channel '{args['channel_name']}' not found."
-                    await data_store.set_verification(guild.id, args["enabled"], role.id, ch.id, args["message"])
-                    if args["enabled"]:
-                        from .systems import VerificationView
-                        embed = discord.Embed(title="✅ Verification", description=args["message"], color=COLOR_OK)
-                        embed.set_footer(text="Click the button below to verify")
-                        await ch.send(embed=embed, view=VerificationView())
-                    entry = f"Set verification: role=@{role.name}, channel=#{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("set_verification", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "save_server_snapshot":
-                    snap_data: dict = {"categories": [], "channels": [], "roles": []}
-                    for cat in guild.categories:
-                        snap_data["categories"].append({"name": cat.name, "position": cat.position})
-                    for ch in guild.channels:
-                        snap_data["channels"].append({
-                            "name": ch.name, "type": type(ch).__name__,
-                            "category": ch.category.name if ch.category else None,
-                            "topic": getattr(ch, "topic", None), "position": ch.position,
-                        })
-                    for r in guild.roles:
-                        if r.is_default():
-                            continue
-                        snap_data["roles"].append({
-                            "name": r.name, "color": f"#{r.color.value:06X}", "hoist": r.hoist,
-                            "mentionable": r.mentionable, "position": r.position, "permissions": r.permissions.value,
-                        })
-                    import secrets
-                    sid = secrets.token_hex(3)
-                    await data_store.save_snapshot(guild.id, sid, args["name"], snap_data)
-                    entry = f"Saved snapshot '{args['name']}' ({len(snap_data['channels'])} channels, {len(snap_data['roles'])} roles)"
-                    edit_log.append(entry); _add_changelog_entry("save_server_snapshot", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "restore_server_snapshot":
-                    snap = await data_store.get_snapshot(guild.id, args["snapshot_id"])
-                    if not snap:
-                        return f"Snapshot '{args['snapshot_id']}' not found."
-                    data = snap["data"]
-                    created = 0
-                    for r in sorted(data.get("roles", []), key=lambda x: x.get("position", 0)):
-                        if not discord.utils.get(guild.roles, name=r["name"]):
-                            try:
-                                await guild.create_role(name=r["name"], color=discord.Color(int(r["color"].lstrip("#"), 16)), hoist=r["hoist"], mentionable=r["mentionable"], permissions=discord.Permissions(r["permissions"]))
-                                created += 1
-                            except Exception:
-                                pass
-                    for c in data.get("categories", []):
-                        if not discord.utils.get(guild.categories, name=c["name"]):
-                            try:
-                                await guild.create_category(c["name"])
-                                created += 1
-                            except Exception:
-                                pass
-                    for ch in data.get("channels", []):
-                        if not discord.utils.get(guild.channels, name=ch["name"]):
-                            cat = discord.utils.get(guild.categories, name=ch["category"]) if ch.get("category") else None
-                            try:
-                                if ch["type"] == "TextChannel":
-                                    await guild.create_text_channel(ch["name"], category=cat, topic=ch.get("topic"))
-                                elif ch["type"] == "VoiceChannel":
-                                    await guild.create_voice_channel(ch["name"], category=cat)
-                                elif ch["type"] == "ForumChannel":
-                                    await guild.create_forum_channel(ch["name"], category=cat)
-                                elif ch["type"] == "StageChannel":
-                                    await guild.create_stage_channel(ch["name"], category=cat)
-                                created += 1
-                            except Exception:
-                                pass
-                    entry = f"Restored {created} items from snapshot '{snap['name']}'"
-                    edit_log.append(entry); _add_changelog_entry("restore_server_snapshot", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "list_snapshots":
-                    snaps = await data_store.list_snapshots(guild.id)
-                    if not snaps:
-                        return "No snapshots found."
-                    lines = []
-                    for sid, s in snaps.items():
-                        ts = datetime.datetime.fromtimestamp(s["ts"]).strftime("%Y-%m-%d %H:%M")
-                        lines.append(f"📸 {s['name']} (ID: {sid}, {ts})")
-                    return "\n".join(lines)[:1500]
-
-                if name == "set_automation":
-                    trigger = args["trigger"]
-                    if trigger not in ("member_join", "member_leave"):
-                        return "Trigger must be 'member_join' or 'member_leave'."
-                    role_id = None
-                    if args.get("role_name") and args["role_name"].lower() != "none":
-                        r = _find_role(guild, args["role_name"])
-                        role_id = r.id if r else None
-                    ch_id = None
-                    if args.get("channel_name"):
-                        ch = _find_channel(guild, args["channel_name"])
-                        ch_id = ch.id if ch else None
-                    await data_store.set_automation(guild.id, trigger, {"role_id": role_id, "message": args["message"], "channel_id": ch_id})
-                    entry = f"Set automation: {trigger}"
-                    edit_log.append(entry); _add_changelog_entry("set_automation", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "add_scheduled_action":
-                    ch = _find_channel(guild, args["channel_name"])
-                    if not ch or not isinstance(ch, discord.TextChannel):
-                        return f"Channel '{args['channel_name']}' not found."
-                    day = args["day"].lower().strip()
-                    valid = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "daily"]
-                    if day not in valid:
-                        return f"Invalid day. Use: {', '.join(valid)}"
-                    import secrets
-                    sid = secrets.token_hex(3)
-                    await data_store.add_scheduled_action(guild.id, sid, ch.id, args["content"], day, args["hour"], args["minute"])
-                    entry = f"Scheduled message in #{ch.name} on {day} at {args['hour']:02d}:{args['minute']:02d}"
-                    edit_log.append(entry); _add_changelog_entry("add_scheduled_action", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "list_scheduled":
-                    entries = await data_store.list_scheduled_actions(guild.id)
-                    if not entries:
-                        return "No scheduled actions."
-                    lines = []
-                    for e in entries:
-                        lines.append(f"⏰ {e['id']}: {e['day']} at {e['hour']:02d}:{e['minute']:02d} UTC in <#{e['channel_id']}> — {e['content'][:80]}")
-                    return "\n".join(lines)[:1500]
-
-                if name == "remove_scheduled":
-                    ok = await data_store.remove_scheduled_action(guild.id, args["sched_id"])
-                    entry = f"Removed scheduled action {args['sched_id']}" if ok else f"Scheduled action {args['sched_id']} not found"
-                    edit_log.append(entry); _add_changelog_entry("remove_scheduled", entry)
-                    await _update_live_log()
-                    return entry
-
-                if name == "set_always_allow_deletes":
-                    await data_store.set_always_allow_deletes(guild.id, args["enabled"])
-                    entry = f"Always-allow-deletes is now {'ON' if args['enabled'] else 'OFF'}"
-                    edit_log.append(entry); _add_changelog_entry("set_always_allow_deletes", entry)
-                    await _update_live_log()
-                    return entry
 
                 return f"Unknown function: {name}"
             except discord.Forbidden:
@@ -2047,21 +1718,23 @@ class Subagent(commands.Cog, name="Subagent"):
 
             full_system = f"{SUBAGENT_SYSTEM}\n\n## CURRENT SERVER STATE\n{context}"
 
+            # Track conversation context across provider fallbacks
+            chat_messages: list[dict] = [{"role": "user", "content": prompt}]
+            gemini_failed_mid_conversation = False
+
             if use_gemini:
                 contents = [genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=prompt)])]
                 tools = _build_tools()
 
-                for gemini_round in range(MAX_ROUNDS):
+                for round_num in range(MAX_ROUNDS):
                     response = await ai_providers.gemini_function_call(full_system, contents, tools)
                     if response is None:
-                        use_gemini = False
+                        if round_num == 0:
+                            use_gemini = False
+                        else:
+                            gemini_failed_mid_conversation = True
                         break
                     if not response.function_calls:
-                        if gemini_round < 3 and not edit_log:
-                            contents.append(genai_types.Content(role="model", parts=[genai_types.Part.from_text(text=response.text or "")]))
-                            contents.append(genai_types.Content(role="user", parts=[genai_types.Part.from_text(text="You have NOT called any functions yet. You MUST call the appropriate function(s) NOW to execute the user's request. Do not describe what you would do — CALL THE FUNCTIONS.")]))
-
-                            continue
                         final_text = response.text or "Done."
                         break
                     fc_parts = []
@@ -2071,29 +1744,30 @@ class Subagent(commands.Cog, name="Subagent"):
                         result = await _execute_function(fn_name, fn_args)
                         fc_parts.append(genai_types.Part.from_function_response(name=fn_name, response={"result": result}))
                         contents.append(genai_types.Content(role="model", parts=[genai_types.Part.from_function_call(name=fn_name, args=fn_args)]))
+                        # Also track in OpenAI format for fallback
+                        chat_messages.append({"role": "assistant", "content": None, "tool_calls": [{"id": f"gemini_{round_num}", "type": "function", "function": {"name": fn_name, "arguments": json.dumps(fn_args)}}]})
+                        chat_messages.append({"role": "tool", "tool_call_id": f"gemini_{round_num}", "content": str(result)})
                     contents.append(genai_types.Content(role="user", parts=fc_parts))
                 else:
                     final_text = "Reached max function-call rounds."
 
-            if not use_gemini:
+            if not use_gemini or gemini_failed_mid_conversation:
                 tools_json = _build_tools_json()
-                chat_messages: list[dict] = [{"role": "user", "content": prompt}]
+                # If Gemini failed mid-conversation, chat_messages already has context
+                if not gemini_failed_mid_conversation:
+                    chat_messages = [{"role": "user", "content": prompt}]
 
                 for round_num in range(MAX_ROUNDS):
-                    force = round_num < 3 and not edit_log
-                    result = await ai_providers.openai_function_call(full_system, chat_messages, tools_json, force_tools=force)
+                    result = await ai_providers.openai_function_call(full_system, chat_messages, tools_json)
                     if result is None:
                         result = await ai_providers.text_function_call(full_system, chat_messages, tools_json)
                         if result is None:
-                            final_text = "I had trouble processing that request. Please try again."
+                            if not final_text:
+                                final_text = "I had trouble processing that request. Please try again."
                             break
                     tool_calls = result.get("tool_calls")
                     if not tool_calls:
-                        if round_num < 3 and not edit_log:
-                            chat_messages.append({"role": "assistant", "content": result.get("content", "")})
-                            chat_messages.append({"role": "user", "content": "You have NOT called any functions yet. You MUST call the appropriate function(s) NOW to execute the user's request. Do not describe what you would do — CALL THE FUNCTIONS."})
-                            continue
-                        final_text = result.get("content") or "Done."
+                        final_text = result.get("content") or final_text or "Done."
                         break
                     for idx, tc in enumerate(tool_calls):
                         call_id = f"call_{round_num}_{idx}"
@@ -2103,7 +1777,8 @@ class Subagent(commands.Cog, name="Subagent"):
                         chat_messages.append({"role": "assistant", "content": None, "tool_calls": [{"id": call_id, "type": "function", "function": {"name": fn_name, "arguments": json.dumps(fn_args)}}]})
                         chat_messages.append({"role": "tool", "tool_call_id": call_id, "content": exec_result})
                 else:
-                    final_text = "Reached max function-call rounds."
+                    if not final_text:
+                        final_text = "Reached max function-call rounds."
 
         except Exception:
             log.exception("Subagent error")
@@ -2111,6 +1786,7 @@ class Subagent(commands.Cog, name="Subagent"):
 
         final_text = sanitize_ai_output(final_text, user_message=prompt)
 
+        # Final edit of the status message with complete results
         embed = discord.Embed(title=f"🤖 {BOT_NAME} Subagent", color=COLOR_OK if edit_log else BOT_COLOR)
         embed.add_field(name="Request", value=prompt[:1024], inline=False)
         if final_text:
