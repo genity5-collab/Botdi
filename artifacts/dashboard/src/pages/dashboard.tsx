@@ -1,4 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { getAuth, clearAuth, getApiKeyConfig, type DiscordUser } from '@/lib/auth';
+import Login from '@/pages/login';
+import ApiKeySettings from '@/components/api-key-settings';
 import {
   useHealthCheck,
   getHealthCheckQueryKey,
@@ -146,6 +149,26 @@ const StatusDot = ({ isOnline }: { isOnline?: boolean }) => (
 // ── Main dashboard ─────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
+  // ── Auth ────────────────────────────────────────────────────────────────────
+  const [authUser, setAuthUser] = useState<DiscordUser | null>(null);
+  const [showLogin, setShowLogin] = useState(false);
+
+  useEffect(() => {
+    const auth = getAuth();
+    if (auth) setAuthUser(auth.user);
+    else setShowLogin(true);
+  }, []);
+
+  const handleLogout = () => {
+    clearAuth();
+    setAuthUser(null);
+    setShowLogin(true);
+  };
+
+  if (showLogin || !authUser) {
+    return <Login onLogin={(u) => { setAuthUser(u); setShowLogin(false); }} />;
+  }
+
   // ── Queries ─────────────────────────────────────────────────────────────────
   const { data: health } = useHealthCheck({
     query: { refetchInterval: 10000, queryKey: getHealthCheckQueryKey() },
@@ -219,8 +242,9 @@ export default function Dashboard() {
   };
 
   // ── Bottom tab state ─────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<'logs' | 'commands'>('logs');
+  const [activeTab, setActiveTab] = useState<'logs' | 'commands' | 'settings'>('logs');
   const [cmdSearch, setCmdSearch] = useState('');
+  const apiKeyConfig = getApiKeyConfig();
 
   const filteredCmds = COMMANDS.map((cat) => ({
     ...cat,
@@ -238,45 +262,80 @@ export default function Dashboard() {
 
       {/* ── HEADER ── */}
       <header className="flex-none flex flex-wrap items-center justify-between bg-card border border-card-border p-4 rounded-lg shadow-sm gap-4">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-[#5865F2] flex items-center justify-center shadow-[0_0_15px_rgba(88,101,242,0.3)]">
+            <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+            </svg>
+          </div>
+          <div>
+            <h1 className="text-lg font-bold leading-tight">Vyrion Dashboard</h1>
+            <p className="text-xs text-muted-foreground">Bot Management Panel</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {authUser && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-secondary/50 rounded-md border border-border">
+              <img src={authUser.avatar} alt={authUser.username} className="w-6 h-6 rounded-full" />
+              <span className="text-xs font-medium text-foreground">{authUser.global_name}</span>
+              <button
+                onClick={handleLogout}
+                className="ml-1 text-xs text-muted-foreground hover:text-[#ED4245] transition-colors font-bold"
+                title="Logout"
+              >
+                EXIT
+              </button>
+            </div>
+          )}
+        </div>
+      </header>
+      {/* ── STATUS BAR ── */}
+      <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4 bg-card border border-card-border p-3 rounded-lg">
+        <div className="flex items-center gap-3 sm:gap-4">
           <div className="flex items-center gap-3 bg-secondary/50 px-3 py-1.5 rounded-md border border-border">
             <StatusDot isOnline={status?.online} />
             <span className={`text-sm font-bold tracking-widest uppercase ${status?.online ? 'text-[#23A55A]' : 'text-[#ED4245]'}`}>
-              {status?.online ? 'System Online' : 'System Offline'}
+              {status?.online ? 'Online' : 'Offline'}
             </span>
           </div>
-          <h1 className="text-xl font-bold tracking-tight">{status?.bot_name || 'Bot_Instance'}</h1>
-          <div className="h-4 w-px bg-border hidden sm:block" />
-          <div className="text-sm text-muted-foreground font-mono hidden sm:block">
+          <h1 className="text-lg sm:text-xl font-bold tracking-tight">{status?.bot_name || 'Bot_Instance'}</h1>
+          <div className="h-4 w-px bg-border hidden md:block" />
+          <div className="text-sm text-muted-foreground font-mono hidden md:block">
             ID: {status?.bot_id || '---'}
           </div>
         </div>
-        <div className="flex items-center gap-8 text-sm">
+        <div className="flex items-center gap-4 sm:gap-8 text-sm">
           <div className="flex flex-col items-end">
             <span className="text-muted-foreground uppercase text-[10px] tracking-widest font-bold">API Status</span>
             <span className={`font-bold tracking-wider ${health ? 'text-[#23A55A]' : 'text-muted-foreground animate-pulse'}`}>
               {health ? 'OPERATIONAL' : 'WAITING'}
             </span>
           </div>
-          <div className="flex flex-col items-end">
+          <div className="flex flex-col items-end hidden sm:flex">
             <span className="text-muted-foreground uppercase text-[10px] tracking-widest font-bold">Last Updated</span>
             <span className="font-mono">
               {status?.last_updated ? new Date(status.last_updated).toLocaleTimeString() : '---'}
             </span>
           </div>
+          {apiKeyConfig.bonusMessages > 0 && (
+            <div className="flex flex-col items-end">
+              <span className="text-[#F0B132] uppercase text-[10px] tracking-widest font-bold">Bonus</span>
+              <span className="font-bold text-[#F0B132]">+{apiKeyConfig.bonusMessages} msgs</span>
+            </div>
+          )}
         </div>
-      </header>
-
+      </div>
       {/* ── STATS GRID ── */}
-      <div className="flex-none grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="flex-none grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
 
         {/* System */}
-        <div className="bg-card border border-card-border rounded-lg p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
-          <div className="text-xs font-bold tracking-widest uppercase text-muted-foreground mb-4">System Resources</div>
+        <div className="bg-card border border-card-border rounded-lg p-3 sm:p-4 flex flex-col justify-between shadow-sm min-h-[90px] sm:min-h-[100px]">
+          <div className="text-xs font-bold tracking-widest uppercase text-muted-foreground mb-4">System</div>
           <div className="flex justify-between items-end">
             <div>
               <div className="text-[10px] text-muted-foreground/70 uppercase tracking-widest font-bold mb-1">Guilds</div>
-              <div className="text-3xl font-bold leading-none">{status?.guild_count ?? '---'}</div>
+              <div className="text-2xl sm:text-3xl font-bold leading-none">{status?.guild_count ?? '---'}</div>
             </div>
             <div className="text-right">
               <div className="text-[10px] text-muted-foreground/70 uppercase tracking-widest font-bold mb-1">Uptime</div>
@@ -288,8 +347,8 @@ export default function Dashboard() {
         </div>
 
         {/* Strikes */}
-        <div className="bg-card border border-card-border rounded-lg p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
-          <div className="text-xs font-bold tracking-widest uppercase text-muted-foreground mb-4">Moderation Strikes</div>
+        <div className="bg-card border border-card-border rounded-lg p-3 sm:p-4 flex flex-col justify-between shadow-sm min-h-[90px] sm:min-h-[100px]">
+          <div className="text-xs font-bold tracking-widest uppercase text-muted-foreground mb-4">Strikes</div>
           <div className="flex justify-between items-end gap-2">
             <div>
               <div className="text-[10px] text-muted-foreground/70 uppercase tracking-widest font-bold mb-1">Total Users</div>
@@ -313,12 +372,12 @@ export default function Dashboard() {
         </div>
 
         {/* Tickets */}
-        <div className="bg-card border border-card-border rounded-lg p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
-          <div className="text-xs font-bold tracking-widest uppercase text-muted-foreground mb-4">Support Tickets</div>
+        <div className="bg-card border border-card-border rounded-lg p-3 sm:p-4 flex flex-col justify-between shadow-sm min-h-[90px] sm:min-h-[100px]">
+          <div className="text-xs font-bold tracking-widest uppercase text-muted-foreground mb-4">Tickets</div>
           <div className="flex justify-between items-end gap-4">
             <div>
               <div className="text-[10px] text-muted-foreground/70 uppercase tracking-widest font-bold mb-1">Total</div>
-              <div className="text-3xl font-bold leading-none">{totalTickets}</div>
+              <div className="text-2xl sm:text-3xl font-bold leading-none">{totalTickets}</div>
             </div>
             <div className="flex gap-4">
               <div className="flex flex-col items-end">
@@ -334,7 +393,7 @@ export default function Dashboard() {
         </div>
 
         {/* Diagnostics */}
-        <div className="bg-card border border-card-border rounded-lg p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
+        <div className="bg-card border border-card-border rounded-lg p-3 sm:p-4 flex flex-col justify-between shadow-sm min-h-[90px] sm:min-h-[100px]">
           <div className="text-xs font-bold tracking-widest uppercase text-muted-foreground mb-4">Diagnostics</div>
           <div className="flex items-end justify-between">
             <div className="flex flex-col">
@@ -355,8 +414,39 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* ── MY SESSION CARD ── */}
+      {authUser && (
+        <div className="flex-none bg-card border border-card-border rounded-lg p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-xs font-bold tracking-widest uppercase text-muted-foreground">My Session</div>
+            <div className="flex items-center gap-2">
+              <img src={authUser.avatar} alt={authUser.username} className="w-5 h-5 rounded-full" />
+              <span className="text-xs font-mono text-muted-foreground">{authUser.id}</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+            <div>
+              <div className="text-[10px] text-muted-foreground/70 uppercase tracking-widest font-bold mb-1">Username</div>
+              <div className="text-sm font-bold">{authUser.global_name}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground/70 uppercase tracking-widest font-bold mb-1">Login Method</div>
+              <div className="text-sm font-bold">Discord OAuth2</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground/70 uppercase tracking-widest font-bold mb-1">Token Storage</div>
+              <div className="text-sm font-bold text-[#23A55A]">Local Only</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground/70 uppercase tracking-widest font-bold mb-1">Visibility</div>
+              <div className="text-sm font-bold text-[#23A55A]">Your Stats Only</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── BOTTOM PANEL (tabbed) ── */}
-      <div className="flex flex-col h-[520px] md:flex-1 md:min-h-0 bg-card border border-card-border rounded-lg overflow-hidden shadow-sm">
+      <div className="flex flex-col h-[400px] sm:h-[520px] md:flex-1 md:min-h-0 bg-card border border-card-border rounded-lg overflow-hidden shadow-sm">
 
         {/* Tab bar */}
         <div className="flex-none flex items-center border-b border-card-border bg-secondary/30">
@@ -365,10 +455,11 @@ export default function Dashboard() {
             {[
               { id: 'logs', label: 'Live Logs', dot: <span className="w-1.5 h-1.5 bg-[#F0B132] rounded-full animate-pulse shadow-[0_0_6px_rgba(240,177,50,0.8)]" /> },
               { id: 'commands', label: 'Commands', dot: null },
+              { id: 'settings', label: 'Settings', dot: null },
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as 'logs' | 'commands')}
+                onClick={() => setActiveTab(tab.id as 'logs' | 'commands' | 'settings')}
                 className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-widest border-b-2 transition-colors ${
                   activeTab === tab.id
                     ? 'border-[#5865F2] text-[#5865F2]'
@@ -392,7 +483,7 @@ export default function Dashboard() {
           </div>
 
           {/* Tab-specific controls */}
-          <div className="ml-auto flex items-center gap-1.5 px-2 md:px-4">
+          <div className="ml-auto flex items-center gap-1.5 px-2 md:px-4 overflow-x-auto">
             {activeTab === 'logs' && (
               <>
                 <button
@@ -457,6 +548,13 @@ export default function Dashboard() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* ── API Key Settings ── */}
+        {activeTab === 'settings' && (
+          <div className="flex-1 overflow-y-auto p-4 bg-[#09090b]/50">
+            <ApiKeySettings />
           </div>
         )}
 
