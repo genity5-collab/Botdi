@@ -7,7 +7,6 @@ Tries providers in order until one succeeds:
   3. OpenRouter (OpenAI-compatible REST, native tool calling on select models)
   4. Hugging Face (Inference API REST, text-based calling)
   5. Cerebras (OpenAI-compatible REST, native tool calling)
-  6. Fireworks (OpenAI-compatible REST, native tool calling)
 """
 from __future__ import annotations
 
@@ -241,16 +240,6 @@ async def generate(
         for model in cb_models:
             text = await _openai_compat_chat(
                 CEREBRAS_URL, CEREBRAS_API_KEY, model, rest_messages,
-                temperature=temperature, max_tokens=max_tokens,
-            )
-            if text:
-                return text
-    if FIREWORKS_API_KEY:
-        active_fw = getattr(config, "ACTIVE_FIREWORKS_MODEL", config.FIREWORKS_MODELS[0])
-        fw_models = [active_fw] + [m for m in config.FIREWORKS_MODELS if m != active_fw]
-        for model in fw_models:
-            text = await _openai_compat_chat(
-                FIREWORKS_URL, FIREWORKS_API_KEY, model, rest_messages,
                 temperature=temperature, max_tokens=max_tokens,
             )
             if text:
