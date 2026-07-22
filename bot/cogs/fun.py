@@ -68,7 +68,8 @@ class Fun(commands.Cog, name="Fun"):
     @app_commands.describe(question="Poll question")
     async def poll(self, interaction: discord.Interaction, question: str) -> None:
         embed = discord.Embed(title="📊 Poll", description=question, color=BOT_COLOR)
-        msg = await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed)
+        msg = await interaction.original_response()
         await msg.add_reaction("✅")
         await msg.add_reaction("❌")
 
