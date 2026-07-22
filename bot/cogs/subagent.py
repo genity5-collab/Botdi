@@ -31,7 +31,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from config import (
-    LOG_CHANNEL_ID, BOT_COLOR, COLOR_OK, COLOR_ERR, BOT_OWNER_ID, BOT_NAME,
+    LOG_CHANNEL_ID, BOT_COLOR, COLOR_OK, COLOR_ERR, COLOR_WARN, BOT_OWNER_ID, BOT_NAME,
     SUBAGENT_RATE_LIMIT, SUBAGENT_RATE_WINDOW,
 )
 from data_store import check_subagent_rate_limit
@@ -75,7 +75,31 @@ def _safe_content(content: str) -> str:
     return _MASS_MENTION_RE.sub("", content).strip()
 
 
-SUBAGENT_SYSTEM = """You are Vyrion Subagent, an expert Discord server manager AI. You execute Discord actions by calling functions.
+SUBAGENT_SYSTEM = """You are Vyrion Subagent, an elite Discord server architect AI operating in 2026. You have deep expertise in Discord server management, permission systems, and community design. You execute actions by calling functions.
+
+## THINKING PROCESS
+Before calling any functions, think step-by-step about what the user wants:
+1. What is the user's TRUE intent? Not just what they said, but what they actually want to achieve.
+2. What channels, roles, or permissions are needed?
+3. What order should actions be performed in? Dependencies matter.
+4. Are there any edge cases? (e.g. user says "private" → deny @everyone view; user says "read-only" → deny @everyone send)
+5. What would make the result look professional and polished?
+Think internally, then call ALL needed functions at once when independent, or in sequence when dependent.
+
+## PERMISSION LISTENING — CRITICAL
+Listen VERY carefully to exactly what the user asks for. Parse their words precisely:
+- "only @role can see it" → deny view_channel for @everyone, allow view_channel only for that role
+- "@role can talk but not send images" → allow send_messages, deny attach_files and embed_links
+- "private channel" → deny view_channel for @everyone, allow for specified roles only
+- "read-only" → deny send_messages for @everyone, allow view_channel and read_message_history
+- "staff only" → deny view_channel for @everyone, allow for Moderator/Admin roles
+- "everyone can see but only @role can type" → allow view_channel for @everyone, deny send_messages for @everyone, allow send_messages for @role
+- "no images" → deny attach_files and embed_links
+- "no reactions" → deny add_reactions
+- "voice only for @role" → deny view_channel and connect for @everyone, allow for @role
+- "slowmode" → use set_slowmode with the specified seconds
+- "locked" → deny send_messages for @everyone
+When unsure about permissions, set the MOST restrictive option that matches what the user described. Always set @everyone FIRST, then specific roles, then staff roles.
 
 ## DUPLICATE DETECTION — CRITICAL
 1. Before creating ANY new channel, role, category, or event, the system AUTOMATICALLY checks for existing ones with similar names. If one exists, it reuses it instead of creating a duplicate.
@@ -84,7 +108,7 @@ SUBAGENT_SYSTEM = """You are Vyrion Subagent, an expert Discord server manager A
 4. When asked to create something that already exists, the system will reuse it and tell you in the result. Just proceed with the next steps (e.g. setting permissions, sending messages).
 
 ## CHANNEL_NAME OPTIONAL
-For send_message, send_embed, send_poll, send_button_embed, send_game, send_gif: if the user does NOT specify a channel, omit channel_name entirely. The system will use the current channel automatically. Only include channel_name when the user explicitly names a channel.
+For send_message, send_embed, send_poll, send_button_embed, send_game, send_gif: if the user does NOT specify a channel, omit channel_name completely. The system will use the current channel automatically. Only include channel_name when the user explicitly names a channel.
 
 ## CRITICAL RULES
 1. ALWAYS call functions to execute actions. NEVER just describe what you would do.
@@ -92,8 +116,8 @@ For send_message, send_embed, send_poll, send_button_embed, send_game, send_gif:
 3. When asked to restrict a channel to specific roles, use set_channel_permissions to DENY access for @everyone and ALLOW access for the specified role. ALWAYS set @everyone permissions FIRST, then set each role's permissions.
 4. When asked to create a channel for a specific role, create the channel AND set permissions in the same request.
 5. Call multiple functions at once when actions are independent. Call them in sequence when one depends on another.
-6. Make things look professional — add emojis to channel names, topics, and embeds when appropriate.
-7. Use rich embeds (with colors, fields, footers, thumbnails) instead of plain messages when announcing something.
+6. Make things look professional — add emojis to channel names, topics, and embeds when appropriate. Every created channel should have a topic. Every announcement should use a rich embed.
+7. Use rich embeds with PROFESSIONAL design: meaningful titles with emojis, well-formatted descriptions, appropriate colors, fields for structured info, footers for attribution, thumbnails for visual appeal. NEVER send plain text when an embed would look better.
 8. When creating roles, set ALL appropriate permissions based on the role type:
    - Moderator: manage_messages, kick_members, timeout_members, manage_channels, view_audit_log, manage_roles, ban_members, manage_threads, moderate_members
    - Admin: administrator
@@ -102,11 +126,11 @@ For send_message, send_embed, send_poll, send_button_embed, send_game, send_gif:
    - Member: view_channel, send_messages, read_message_history, add_reactions, connect, speak
    - YouTuber: view_channel, send_messages, read_message_history, embed_links, attach_files, add_reactions, use_external_emojis
    When asked to set up permissions for a role, ALWAYS include ALL relevant permissions. Don't just set one or two.
-9. When creating categories, organize channels logically (e.g. "Information" category for rules, announcements).
+9. When creating categories, organize channels logically (e.g. "Information" category for rules, announcements). Use professional names with emojis: "📋 Information", "💬 Community", "🔊 Voice Channels", "🎯 Gaming", "📚 Resources".
 10. NEVER mention API errors, provider names, model names, or internal system details.
 11. If something goes wrong internally, just say 'I had trouble with that action.'
 12. Do not ask for confirmation. Do not explain what you're about to do. Just call the functions.
-13. After all functions are called, give a brief summary with emoji decorations. Keep summaries under 75 words.
+13. After all functions are called, give a brief summary with emoji decorations. Keep summaries under 75 words. Make the summary visually structured with bullet points.
 14. Before creating a new channel or role, the system automatically checks for existing ones with similar names and reuses them. Do not worry about duplicates.
 15. When you need to delete something (channel, role, event), just call the delete function — the system will automatically ask the user for confirmation before executing.
 16. You can read recent bot logs by calling read_logs to diagnose issues or check server activity.
@@ -114,7 +138,7 @@ For send_message, send_embed, send_poll, send_button_embed, send_game, send_gif:
 18. You can send GIFs by calling send_gif with a search query to add visual flair to announcements and messages.
 19. When the user asks to create a channel without specifying a type, the system will ask them whether they want a normal text, forum, announcement, voice, or stage channel.
 20. Use send_gif alongside send_embed or send_message to make announcements more engaging when appropriate.
-21. NEVER send messages that contain slurs, hate speech, or rule-breaking content. The system will block such content automatically.
+21. NEVER send messages that contain slurs, hate speech, or rule-breaking content. The system will block such content automatically and show a warning to the user.
 22. When asked for interactive content, use send_poll for polls, send_button_embed for embeds with action buttons, or send_game for mini-games. Available game types: trivia, trivia_quiz, would_you_rather, this_or_that, rock_paper_scissors, number_guess, word_scramble, emoji_guess.
 23. When setting up a channel for a role, set permissions for @everyone (deny view_channel), then for the specific role (allow view_channel, send_messages, read_message_history, etc.), AND for any moderator/admin roles (allow all).
 24. Listen carefully to what the user asks. If they say "only @role can see it", deny view_channel for @everyone and allow it only for that role. If they say "@role can talk but not send images", allow send_messages but deny attach_files and embed_links.
@@ -128,6 +152,10 @@ For send_message, send_embed, send_poll, send_button_embed, send_game, send_gif:
 32. When creating channels, the system automatically sets @everyone permissions (view, send, read history for text; view, connect, speak for voice). You only need to call set_channel_permissions if you want to RESTRICT access further.
 33. When polishing channels, add emoji decorations to names and topics. Make announcements visually appealing with rich embeds (colors, fields, thumbnails, footers). Use send_gif to add visual flair.
 34. When the user says "go to general and send a message", call send_message with channel_name="general". If they don't specify a channel at all, omit channel_name and the system uses the current channel.
+35. When creating channels, ALWAYS include a topic with an emoji. Make channel names clean and professional. Examples: "general" → topic "💬 General discussion", "rules" → topic "📜 Server rules — read before chatting", "announcements" → topic "📢 Important server updates".
+36. When sending embeds to announce new channels or roles, make them visually stunning: use appropriate colors (blurple for general, gold for announcements, green for success, red for warnings), include fields with details, add footer with attribution, use thumbnails when available.
+37. When the user asks for something complex like "set up my whole server", break it into logical steps: categories first, then channels within categories, then roles, then permissions, then welcome messages. Execute in dependency order.
+38. You can create invites for channels using create_invite. Useful when the user wants to share a link to a specific channel.
 
 ## EXAMPLES
 
@@ -148,14 +176,14 @@ You should:
 
 User: "Set up a server with rules and announcements"
 You should:
-1. Call create_category with name="Information"
-2. Call create_text_channel with name="rules", category="Information", topic="📜 Server Rules"
-3. Call create_text_channel with name="announcements", category="Information", topic="📢 Server Announcements"
-4. Call create_text_channel with name="general", category="Information", topic="💬 General Chat"
+1. Call create_category with name="📋 Information"
+2. Call create_text_channel with name="rules", category="Information", topic="📜 Server Rules — Read Before Chatting"
+3. Call create_text_channel with name="announcements", category="Information", topic="📢 Server Announcements & Updates"
+4. Call create_text_channel with name="general", category="Information", topic="💬 General Discussion"
 5. Call set_channel_permissions with channel_name="rules", role_name="@everyone", allow="view_channel,read_message_history", deny="send_messages"
 6. Call set_channel_permissions with channel_name="announcements", role_name="@everyone", allow="view_channel,read_message_history", deny="send_messages"
-7. Call send_embed in rules with the rules content
-8. Call send_embed in announcements welcoming everyone
+7. Call send_embed in rules with title "📜 Server Rules", description with the rules content, color="#F0B132", footer="Vyrion Subagent"
+8. Call send_embed in announcements with title "📢 Welcome to the Server!", description welcoming everyone, color="#5865F2", footer="Vyrion Subagent"
 
 User: "Make #announcements read-only"
 You should:
@@ -958,25 +986,43 @@ class Subagent(commands.Cog, name="Subagent"):
             return
 
         guild = interaction.guild
-        edit_log: list[str] = []
+        edit_log: list[dict] = []  # Each entry: {icon, text, status}
 
-        # Send initial status embed (will be edited live as actions complete)
-        status_embed = discord.Embed(title=f"🤖 {BOT_NAME} Subagent", color=BOT_COLOR)
-        status_embed.add_field(name="Request", value=prompt[:1024], inline=False)
-        status_embed.add_field(name="Status", value="⏳ Working on it...", inline=False)
-        status_embed.set_footer(text=f"Requested by {interaction.user.display_name}")
-        status_msg = await interaction.followup.send(embed=status_embed, ephemeral=True)
+        # Send thinking embed first
+        thinking_embed = discord.Embed(title=f"🧠 {BOT_NAME} Subagent — Thinking...", color=0xF0B132)
+        thinking_embed.add_field(name="Request", value=prompt[:1024], inline=False)
+        thinking_embed.add_field(name="Status", value="💭 Analyzing your request and planning actions...", inline=False)
+        thinking_embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+        status_msg = await interaction.followup.send(embed=thinking_embed, ephemeral=True)
 
         async def _update_live_log() -> None:
-            """Edit the status embed to show live progress."""
+            """Edit the status embed to show live progress with styled indicators."""
             embed = discord.Embed(title=f"🤖 {BOT_NAME} Subagent", color=BOT_COLOR)
             embed.add_field(name="Request", value=prompt[:1024], inline=False)
             if edit_log:
-                log_text = "\n".join(f"• {e}" for e in edit_log)
-                if len(log_text) > 1024:
-                    log_text = log_text[:1020] + "…"
-                embed.add_field(name=f"Edit Log ({len(edit_log)} actions)", value=log_text, inline=False)
-            embed.add_field(name="Status", value="⏳ Still working..." if not edit_log else f"⏳ Executing... ({len(edit_log)} actions done)", inline=False)
+                log_lines = []
+                for entry in edit_log:
+                    log_lines.append(f"{entry['icon']} {entry['text']}")
+                log_text = "\n".join(log_lines)
+                # Split into multiple fields if too long (Discord field limit ~1024)
+                if len(log_text) <= 1024:
+                    embed.add_field(name=f"📋 Edit Log ({len(edit_log)} actions)", value=log_text, inline=False)
+                else:
+                    # Split across multiple fields
+                    chunks = []
+                    current_chunk = ""
+                    for line in log_lines:
+                        if len(current_chunk) + len(line) + 1 > 1000:
+                            chunks.append(current_chunk)
+                            current_chunk = line
+                        else:
+                            current_chunk = (current_chunk + "\n" + line).strip() if current_chunk else line
+                    if current_chunk:
+                        chunks.append(current_chunk)
+                    for i, chunk in enumerate(chunks[:6]):
+                        field_name = f"📋 Edit Log ({len(edit_log)} actions)" if i == 0 else f"📋 Continued ({i+1})"
+                        embed.add_field(name=field_name, value=chunk[:1024], inline=False)
+            embed.add_field(name="Status", value="⏳ Executing..." if edit_log else "💭 Thinking...", inline=False)
             embed.set_footer(text=f"Requested by {interaction.user.display_name}")
             try:
                 await status_msg.edit(embed=embed)
@@ -1019,10 +1065,10 @@ class Subagent(commands.Cog, name="Subagent"):
                 if name == "create_text_channel":
                     existing = _find_similar_channel(guild, args["name"])
                     if existing:
-                        entry = f"Reused existing channel #{existing.name} (similar to '{args['name']}')"
-                        edit_log.append(entry); _add_changelog_entry("create_text_channel", entry)
+                        entry = {"icon": "✅", "text": f"Reused existing channel #{existing.name} (similar to '{args['name']}')", "status": "ok"}
+                        edit_log.append(entry); _add_changelog_entry("create_text_channel", entry["text"])
                         await _update_live_log()
-                        return entry
+                        return entry["text"]
                     category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
                     ch = await guild.create_text_channel(args["name"], category=category, topic=args.get("topic"))
                     # Auto-set @everyone permissions: view, send, read history
@@ -1031,18 +1077,18 @@ class Subagent(commands.Cog, name="Subagent"):
                         await ch.set_permissions(guild.default_role, overwrite=overwrite)
                     except discord.Forbidden:
                         pass
-                    entry = f"Created text channel #{ch.name} (with default @everyone permissions)"
-                    edit_log.append(entry); _add_changelog_entry("create_text_channel", entry)
+                    entry = {"icon": "✅", "text": f"Created text channel #{ch.name} (with default @everyone permissions)", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("create_text_channel", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "create_voice_channel":
                     existing = _find_similar_channel(guild, args["name"])
                     if existing:
-                        entry = f"Reused existing channel 🔊 {existing.name} (similar to '{args['name']}')"
-                        edit_log.append(entry); _add_changelog_entry("create_voice_channel", entry)
+                        entry = {"icon": "✅", "text": f"Reused existing channel 🔊 {existing.name} (similar to '{args['name']}')", "status": "ok"}
+                        edit_log.append(entry); _add_changelog_entry("create_voice_channel", entry["text"])
                         await _update_live_log()
-                        return entry
+                        return entry["text"]
                     category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
                     ch = await guild.create_voice_channel(args["name"], category=category, user_limit=args.get("user_limit", 0))
                     # Auto-set @everyone permissions: view, connect, speak
@@ -1051,31 +1097,31 @@ class Subagent(commands.Cog, name="Subagent"):
                         await ch.set_permissions(guild.default_role, overwrite=overwrite)
                     except discord.Forbidden:
                         pass
-                    entry = f"Created voice channel 🔊 {ch.name} (with default @everyone permissions)"
-                    edit_log.append(entry); _add_changelog_entry("create_voice_channel", entry)
+                    entry = {"icon": "✅", "text": f"Created voice channel 🔊 {ch.name} (with default @everyone permissions)", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("create_voice_channel", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "create_category":
                     existing = discord.utils.get(guild.categories, name=args["name"])
                     if existing:
-                        entry = f"Reused existing category 📁 {existing.name}"
-                        edit_log.append(entry); _add_changelog_entry("create_category", entry)
+                        entry = {"icon": "✅", "text": f"Reused existing category 📁 {existing.name}", "status": "ok"}
+                        edit_log.append(entry); _add_changelog_entry("create_category", entry["text"])
                         await _update_live_log()
-                        return entry
+                        return entry["text"]
                     cat = await guild.create_category(args["name"])
-                    entry = f"Created category 📁 {cat.name}"
-                    edit_log.append(entry); _add_changelog_entry("create_category", entry)
+                    entry = {"icon": "✅", "text": f"Created category 📁 {cat.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("create_category", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "create_role":
                     existing = _find_similar_role(guild, args["name"])
                     if existing:
-                        entry = f"Reused existing role @{existing.name} (similar to '{args['name']}')"
-                        edit_log.append(entry); _add_changelog_entry("create_role", entry)
+                        entry = {"icon": "✅", "text": f"Reused existing role @{existing.name} (similar to '{args['name']}')", "status": "ok"}
+                        edit_log.append(entry); _add_changelog_entry("create_role", entry["text"])
                         await _update_live_log()
-                        return entry
+                        return entry["text"]
                     color = _hex_to_int(args.get("color", "#5865F2"))
                     perm_str = args.get("permissions", "")
                     if not perm_str:
@@ -1086,10 +1132,10 @@ class Subagent(commands.Cog, name="Subagent"):
                         hoist=args.get("hoist", False), mentionable=args.get("mentionable", False),
                         permissions=discord.Permissions(perm_bits),
                     )
-                    entry = f"Created role @{role.name} with permissions: {perm_str}"
-                    edit_log.append(entry); _add_changelog_entry("create_role", entry)
+                    entry = {"icon": "✅", "text": f"Created role @{role.name} with permissions: {perm_str}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("create_role", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "set_channel_permissions":
                     ch = _find_channel(guild, args["channel_name"])
@@ -1105,10 +1151,10 @@ class Subagent(commands.Cog, name="Subagent"):
                         deny=discord.Permissions(deny_bits),
                     )
                     await ch.set_permissions(role, overwrite=overwrite)
-                    entry = f"Set permissions for #{ch.name}: @{role.name} allow=[{args.get('allow','')}] deny=[{args.get('deny','')}]"
-                    edit_log.append(entry); _add_changelog_entry("set_channel_permissions", entry)
+                    entry = {"icon": "✅", "text": f"Set permissions for #{ch.name}: @{role.name} allow=[{args.get('allow','')}] deny=[{args.get('deny','')}]", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("set_channel_permissions", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "send_message":
                     ch_name = args.get("channel_name")
@@ -1120,13 +1166,27 @@ class Subagent(commands.Cog, name="Subagent"):
                         ch = interaction.channel
                     content = _filter_content(args["content"])
                     if content is None:
+                        edit_log.append({"icon": "⛔", "text": f"Message blocked in #{ch.name} — rule-breaking content", "status": "failed"})
+                        _add_changelog_entry("send_message", "Blocked: rule-breaking content", "failed")
+                        await _update_live_log()
+                        # Send red warning embed to the target channel
+                        warn_embed = discord.Embed(
+                            title="⛔ Message Blocked",
+                            description="This message was blocked because it contains content that may break server rules.",
+                            color=0xED4245,
+                        )
+                        warn_embed.set_footer(text="Vyrion Subagent • Auto-filter")
+                        try:
+                            await ch.send(embed=warn_embed)
+                        except discord.HTTPException:
+                            pass
                         return "Message blocked: content violates server rules."
                     content = _safe_content(content)
                     await ch.send(content[:2000])
-                    entry = f"Sent message in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("send_message", entry)
+                    entry = {"icon": "✅", "text": f"Sent message in #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("send_message", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]["text"]
 
                 if name == "send_embed":
                     ch_name = args.get("channel_name")
@@ -1139,6 +1199,19 @@ class Subagent(commands.Cog, name="Subagent"):
                     title = args["title"]
                     desc = args.get("description", "")
                     if _filter_content(title) is None or _filter_content(desc) is None:
+                        edit_log.append({"icon": "⛔", "text": f"Embed blocked in #{ch.name} — rule-breaking content", "status": "failed"})
+                        _add_changelog_entry("send_embed", "Blocked: rule-breaking content", "failed")
+                        await _update_live_log()
+                        warn_embed = discord.Embed(
+                            title="⛔ Embed Blocked",
+                            description="This embed was blocked because it contains content that may break server rules.",
+                            color=0xED4245,
+                        )
+                        warn_embed.set_footer(text="Vyrion Subagent • Auto-filter")
+                        try:
+                            await ch.send(embed=warn_embed)
+                        except discord.HTTPException:
+                            pass
                         return "Embed blocked: content violates server rules."
                     embed = discord.Embed(
                         title=title[:256], description=desc[:4096],
@@ -1160,10 +1233,11 @@ class Subagent(commands.Cog, name="Subagent"):
                     if args.get("timestamp"):
                         embed.timestamp = discord.utils.utcnow()
                     await ch.send(embed=embed)
-                    entry = f"Sent embed '{args['title']}' in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("send_embed", entry)
+                    entry_text = f"Sent embed '{args['title']}' in #{ch.name}"
+                    entry = {"icon": "✅", "text": entry_text, "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("send_embed", entry_text)
                     await _update_live_log()
-                    return entry
+                    return entry_text
 
                 if name == "send_poll":
                     ch_name = args.get("channel_name")
@@ -1185,10 +1259,10 @@ class Subagent(commands.Cog, name="Subagent"):
                     embed.set_footer(text=f"Poll ends in {duration} minutes")
                     msg = await ch.send(embed=embed, view=view)
                     view.message = msg
-                    entry = f"Sent poll '{question}' in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("send_poll", entry)
+                    entry = {"icon": "✅", "text": f"Sent poll '{question}' in #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("send_poll", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "send_button_embed":
                     ch_name = args.get("channel_name")
@@ -1208,10 +1282,10 @@ class Subagent(commands.Cog, name="Subagent"):
                     )
                     embed.set_footer(text="Click a button below")
                     await ch.send(embed=embed, view=view)
-                    entry = f"Sent button embed '{args['title']}' in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("send_button_embed", entry)
+                    entry = {"icon": "✅", "text": f"Sent button embed '{args['title']}' in #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("send_button_embed", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "send_game":
                     ch_name = args.get("channel_name")
@@ -1246,10 +1320,10 @@ class Subagent(commands.Cog, name="Subagent"):
                             embed.add_field(name=f"{['🇦','🇧','🇨','🇩','🇪'][i]} {opt}", value="\u200b", inline=False)
                     embed.set_footer(text="Click a button to play!")
                     await ch.send(embed=embed, view=view)
-                    entry = f"Sent {game_type} game in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("send_game", entry)
+                    entry = {"icon": "✅", "text": f"Sent {game_type} game in #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("send_game", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "add_role_to_user":
                     role = _find_role(guild, args["role_name"])
@@ -1259,10 +1333,10 @@ class Subagent(commands.Cog, name="Subagent"):
                     if not member:
                         return f"User '{args['user']}' not found."
                     await member.add_roles(role)
-                    entry = f"Added role @{role.name} to {member.display_name}"
-                    edit_log.append(entry); _add_changelog_entry("add_role_to_user", entry)
+                    entry = {"icon": "✅", "text": f"Added role @{role.name} to {member.display_name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("add_role_to_user", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "remove_role_from_user":
                     role = _find_role(guild, args["role_name"])
@@ -1272,10 +1346,10 @@ class Subagent(commands.Cog, name="Subagent"):
                     if not member:
                         return f"User '{args['user']}' not found."
                     await member.remove_roles(role)
-                    entry = f"Removed role @{role.name} from {member.display_name}"
-                    edit_log.append(entry); _add_changelog_entry("remove_role_from_user", entry)
+                    entry = {"icon": "✅", "text": f"Removed role @{role.name} from {member.display_name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("remove_role_from_user", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "rename_channel":
                     ch = _find_channel(guild, args["current_name"])
@@ -1283,30 +1357,30 @@ class Subagent(commands.Cog, name="Subagent"):
                         return f"Channel '{args['current_name']}' not found."
                     old = ch.name
                     await ch.edit(name=args["new_name"])
-                    entry = f"Renamed #{old} → #{args['new_name']}"
-                    edit_log.append(entry); _add_changelog_entry("rename_channel", entry)
+                    entry = {"icon": "✅", "text": f"Renamed #{old} → #{args['new_name']}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("rename_channel", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "set_slowmode":
                     ch = _find_channel(guild, args["channel_name"])
                     if not ch or not isinstance(ch, discord.TextChannel):
                         return f"Channel '{args['channel_name']}' not found or not a text channel."
                     await ch.edit(slowmode_delay=args["seconds"])
-                    entry = f"Set slowmode in #{ch.name} to {args['seconds']}s"
-                    edit_log.append(entry); _add_changelog_entry("set_slowmode", entry)
+                    entry = {"icon": "✅", "text": f"Set slowmode in #{ch.name} to {args['seconds']}s", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("set_slowmode", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "set_channel_topic":
                     ch = _find_channel(guild, args["channel_name"])
                     if not ch or not isinstance(ch, discord.TextChannel):
                         return f"Channel '{args['channel_name']}' not found or not a text channel."
                     await ch.edit(topic=args["topic"])
-                    entry = f"Set topic of #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("set_channel_topic", entry)
+                    entry = {"icon": "✅", "text": f"Set topic of #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("set_channel_topic", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "delete_channel":
                     ch = _find_channel(guild, args["channel_name"])
@@ -1316,18 +1390,18 @@ class Subagent(commands.Cog, name="Subagent"):
                     if not await _confirm(f"Delete channel #{chname}?"):
                         return f"Cancelled deletion of #{chname}."
                     await ch.delete()
-                    entry = f"Deleted channel #{chname}"
-                    edit_log.append(entry); _add_changelog_entry("delete_channel", entry)
+                    entry = {"icon": "✅", "text": f"Deleted channel #{chname}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("delete_channel", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "create_scheduled_event":
                     existing = _find_event(guild, args["name"])
                     if existing:
-                        entry = f"Reused existing event '{existing.name}' (similar to '{args['name']}')"
-                        edit_log.append(entry); _add_changelog_entry("create_scheduled_event", entry)
+                        entry = {"icon": "✅", "text": f"Reused existing event '{existing.name}' (similar to '{args['name']}')", "status": "ok"}
+                        edit_log.append(entry); _add_changelog_entry("create_scheduled_event", entry["text"])
                         await _update_live_log()
-                        return entry
+                        return entry["text"]
                     start_dt = _parse_iso_dt(args["start_time"])
                     if not start_dt:
                         return f"Invalid start_time: {args['start_time']}"
@@ -1350,10 +1424,10 @@ class Subagent(commands.Cog, name="Subagent"):
                         kwargs["entity_type"] = discord.EntityType.external
                         kwargs["location"] = args.get("location", "Online")
                     event = await guild.create_scheduled_event(**kwargs)
-                    entry = f"Created event '{event.name}' starting {start_dt.isoformat()}"
-                    edit_log.append(entry); _add_changelog_entry("create_scheduled_event", entry)
+                    entry = {"icon": "✅", "text": f"Created event '{event.name}' starting {start_dt.isoformat()}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("create_scheduled_event", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "edit_scheduled_event":
                     event = discord.utils.find(lambda e: e.name.lower() == args["event_name"].lower(), guild.scheduled_events)
@@ -1371,10 +1445,10 @@ class Subagent(commands.Cog, name="Subagent"):
                         edit_kwargs["start_time"] = new_start
                     if edit_kwargs:
                         await event.edit(**edit_kwargs)
-                    entry = f"Edited event '{args['event_name']}'"
-                    edit_log.append(entry); _add_changelog_entry("edit_scheduled_event", entry)
+                    entry = {"icon": "✅", "text": f"Edited event '{args['event_name']}'", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("edit_scheduled_event", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "delete_scheduled_event":
                     event = discord.utils.find(lambda e: e.name.lower() == args["event_name"].lower(), guild.scheduled_events)
@@ -1383,62 +1457,62 @@ class Subagent(commands.Cog, name="Subagent"):
                     if not await _confirm(f"Delete event '{event.name}'?"):
                         return f"Cancelled deletion of event '{event.name}'."
                     await event.delete()
-                    entry = f"Deleted event '{args['event_name']}'"
-                    edit_log.append(entry); _add_changelog_entry("delete_scheduled_event", entry)
+                    entry = {"icon": "✅", "text": f"Deleted event '{args['event_name']}'", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("delete_scheduled_event", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "create_forum_channel":
                     existing = _find_similar_channel(guild, args["name"])
                     if existing:
-                        entry = f"Reused existing channel #{existing.name} (similar to '{args['name']}')"
-                        edit_log.append(entry); _add_changelog_entry("create_forum_channel", entry)
+                        entry = {"icon": "✅", "text": f"Reused existing channel #{existing.name} (similar to '{args['name']}')", "status": "ok"}
+                        edit_log.append(entry); _add_changelog_entry("create_forum_channel", entry["text"])
                         await _update_live_log()
-                        return entry
+                        return entry["text"]
                     category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
                     ch = await guild.create_forum_channel(args["name"], category=category, topic=args.get("topic"))
-                    entry = f"Created forum channel #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("create_forum_channel", entry)
+                    entry = {"icon": "✅", "text": f"Created forum channel #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("create_forum_channel", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "create_announcement_channel":
                     existing = _find_similar_channel(guild, args["name"])
                     if existing:
-                        entry = f"Reused existing channel #{existing.name} (similar to '{args['name']}')"
-                        edit_log.append(entry); _add_changelog_entry("create_announcement_channel", entry)
+                        entry = {"icon": "✅", "text": f"Reused existing channel #{existing.name} (similar to '{args['name']}')", "status": "ok"}
+                        edit_log.append(entry); _add_changelog_entry("create_announcement_channel", entry["text"])
                         await _update_live_log()
-                        return entry
+                        return entry["text"]
                     category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
                     ch = await guild.create_text_channel(args["name"], category=category, topic=args.get("topic"), news=True)
-                    entry = f"Created announcement channel #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("create_announcement_channel", entry)
+                    entry = {"icon": "✅", "text": f"Created announcement channel #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("create_announcement_channel", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "create_stage_channel":
                     existing = _find_similar_channel(guild, args["name"])
                     if existing:
-                        entry = f"Reused existing channel 🔭 {existing.name} (similar to '{args['name']}')"
-                        edit_log.append(entry); _add_changelog_entry("create_stage_channel", entry)
+                        entry = {"icon": "✅", "text": f"Reused existing channel 🔭 {existing.name} (similar to '{args['name']}')", "status": "ok"}
+                        edit_log.append(entry); _add_changelog_entry("create_stage_channel", entry["text"])
                         await _update_live_log()
-                        return entry
+                        return entry["text"]
                     category = discord.utils.get(guild.categories, name=args["category"]) if args.get("category") else None
                     ch = await guild.create_stage_channel(args["name"], category=category)
-                    entry = f"Created stage channel {ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("create_stage_channel", entry)
+                    entry = {"icon": "✅", "text": f"Created stage channel {ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("create_stage_channel", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "create_invite":
                     ch = _find_channel(guild, args["channel_name"])
                     if not ch or not isinstance(ch, (discord.TextChannel, discord.VoiceChannel, discord.StageChannel)):
                         return f"Channel '{args['channel_name']}' not found."
                     invite = await ch.create_invite(max_age=args.get("max_age", 0), max_uses=args.get("max_uses", 0))
-                    entry = f"Created invite {invite.url} for #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("create_invite", entry)
+                    entry = {"icon": "✅", "text": f"Created invite {invite.url} for #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("create_invite", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "kick_member":
                     member = await _find_member(guild, args["user"])
@@ -1449,10 +1523,10 @@ class Subagent(commands.Cog, name="Subagent"):
                     if guild.me.top_role <= member.top_role:
                         return "Cannot kick a member with equal or higher role."
                     await member.kick(reason=args.get("reason", "Subagent action"))
-                    entry = f"Kicked {member.display_name}"
-                    edit_log.append(entry); _add_changelog_entry("kick_member", entry)
+                    entry = {"icon": "✅", "text": f"Kicked {member.display_name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("kick_member", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "ban_member":
                     member = await _find_member(guild, args["user"])
@@ -1462,20 +1536,20 @@ class Subagent(commands.Cog, name="Subagent"):
                             if uid == BOT_OWNER_ID or uid == guild.owner_id:
                                 return "Cannot ban the server owner or bot owner."
                             await guild.ban(discord.Object(id=uid), reason=args.get("reason", "Subagent action"))
-                            entry = f"Banned user ID {uid}"
-                            edit_log.append(entry); _add_changelog_entry("ban_member", entry)
+                            entry = {"icon": "✅", "text": f"Banned user ID {uid}", "status": "ok"}
+                            edit_log.append(entry); _add_changelog_entry("ban_member", entry["text"])
                             await _update_live_log()
-                            return entry
+                            return entry["text"]
                         return f"User '{args['user']}' not found."
                     if member.id == BOT_OWNER_ID or member.id == guild.owner_id:
                         return "Cannot ban the server owner or bot owner."
                     if guild.me.top_role <= member.top_role:
                         return "Cannot ban a member with equal or higher role."
                     await member.ban(reason=args.get("reason", "Subagent action"), delete_message_days=0)
-                    entry = f"Banned {member.display_name}"
-                    edit_log.append(entry); _add_changelog_entry("ban_member", entry)
+                    entry = {"icon": "✅", "text": f"Banned {member.display_name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("ban_member", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "timeout_member":
                     member = await _find_member(guild, args["user"])
@@ -1487,10 +1561,10 @@ class Subagent(commands.Cog, name="Subagent"):
                         return "Cannot timeout a member with equal or higher role."
                     until = discord.utils.utcnow() + datetime.timedelta(minutes=args["minutes"])
                     await member.timeout(until, reason=args.get("reason", "Subagent action"))
-                    entry = f"Timed out {member.display_name} for {args['minutes']}m"
-                    edit_log.append(entry); _add_changelog_entry("timeout_member", entry)
+                    entry = {"icon": "✅", "text": f"Timed out {member.display_name} for {args['minutes']}m", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("timeout_member", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "send_dm":
                     member = await _find_member(guild, args["user"])
@@ -1498,14 +1572,18 @@ class Subagent(commands.Cog, name="Subagent"):
                         return f"User '{args['user']}' not found."
                     content = _filter_content(args["content"])
                     if content is None:
+                        edit_log.append({"icon": "⛔", "text": f"DM to {member.display_name} blocked — rule-breaking content", "status": "failed"})
+                        _add_changelog_entry("send_dm", "Blocked: rule-breaking content", "failed")
+                        await _update_live_log()
                         return "DM blocked: content violates server rules."
                     content = _safe_content(content)
                     dm = await member.create_dm()
                     await dm.send(content[:2000])
-                    entry = f"Sent DM to {member.display_name}"
-                    edit_log.append(entry); _add_changelog_entry("send_dm", entry)
+                    entry_text = f"Sent DM to {member.display_name}"
+                    entry = {"icon": "✅", "text": entry_text, "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("send_dm", entry_text)
                     await _update_live_log()
-                    return entry
+                    return entry_text
 
                 if name == "edit_role":
                     role = _find_role(guild, args["role_name"])
@@ -1524,10 +1602,10 @@ class Subagent(commands.Cog, name="Subagent"):
                         edit_kwargs["mentionable"] = args["mentionable"]
                     if edit_kwargs:
                         await role.edit(**edit_kwargs)
-                    entry = f"Edited role @{role.name}"
-                    edit_log.append(entry); _add_changelog_entry("edit_role", entry)
+                    entry = {"icon": "✅", "text": f"Edited role @{role.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("edit_role", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "delete_role":
                     role = _find_role(guild, args["role_name"])
@@ -1537,10 +1615,10 @@ class Subagent(commands.Cog, name="Subagent"):
                     if not await _confirm(f"Delete role @{rname}?"):
                         return f"Cancelled deletion of role @{rname}."
                     await role.delete()
-                    entry = f"Deleted role @{rname}"
-                    edit_log.append(entry); _add_changelog_entry("delete_role", entry)
+                    entry = {"icon": "✅", "text": f"Deleted role @{rname}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("delete_role", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "reorder_channel":
                     ch = _find_channel(guild, args["channel_name"])
@@ -1555,17 +1633,17 @@ class Subagent(commands.Cog, name="Subagent"):
                         edit_kwargs["position"] = args["position"]
                     if edit_kwargs:
                         await ch.edit(**edit_kwargs)
-                    entry = f"Reordered #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("reorder_channel", entry)
+                    entry = {"icon": "✅", "text": f"Reordered #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("reorder_channel", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "read_logs":
                     count = args.get("count", 10)
                     level = args.get("level", "")
                     logs = _read_recent_logs(count, level)
-                    entry = f"Read {count} log entries"
-                    edit_log.append(entry); _add_changelog_entry("read_logs", entry)
+                    entry = {"icon": "✅", "text": f"Read {count} log entries", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("read_logs", entry["text"])
                     await _update_live_log()
                     return logs[:1500]
 
@@ -1585,13 +1663,17 @@ class Subagent(commands.Cog, name="Subagent"):
                         return "I can only edit my own messages."
                     content = _filter_content(args["new_content"])
                     if content is None:
+                        edit_log.append({"icon": "⛔", "text": f"Edit blocked in #{ch.name} — rule-breaking content", "status": "failed"})
+                        _add_changelog_entry("edit_bot_message", "Blocked: rule-breaking content", "failed")
+                        await _update_live_log()
                         return "Edit blocked: content violates server rules."
                     content = _safe_content(content)
                     await msg.edit(content=content[:2000])
-                    entry = f"Edited message {args['message_id']} in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("edit_bot_message", entry)
+                    entry_text = f"Edited message {args['message_id']} in #{ch.name}"
+                    entry = {"icon": "✅", "text": entry_text, "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("edit_bot_message", entry_text)
                     await _update_live_log()
-                    return entry
+                    return entry_text
 
                 if name == "send_gif":
                     ch_name = args.get("channel_name")
@@ -1607,10 +1689,10 @@ class Subagent(commands.Cog, name="Subagent"):
                     embed = discord.Embed(title=f"🎬 {args['query']}", color=BOT_COLOR)
                     embed.set_image(url=gif_url)
                     await ch.send(embed=embed)
-                    entry = f"Sent GIF '{args['query']}' to #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("send_gif", entry)
+                    entry = {"icon": "✅", "text": f"Sent GIF '{args['query']}' to #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("send_gif", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "delete_message":
                     ch_name = args.get("channel_name")
@@ -1625,10 +1707,10 @@ class Subagent(commands.Cog, name="Subagent"):
                     except (discord.NotFound, ValueError):
                         return f"Message {args['message_id']} not found in #{ch.name}."
                     await msg.delete()
-                    entry = f"Deleted message {args['message_id']} in #{ch.name}"
-                    edit_log.append(entry); _add_changelog_entry("delete_message", entry)
+                    entry = {"icon": "✅", "text": f"Deleted message {args['message_id']} in #{ch.name}", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("delete_message", entry["text"])
                     await _update_live_log()
-                    return entry
+                    return entry["text"]
 
                 if name == "list_channels":
                     lines = []
@@ -1685,28 +1767,28 @@ class Subagent(commands.Cog, name="Subagent"):
 
                 if name == "web_search":
                     result = await _web_search(args["query"])
-                    entry = f"Searched web for '{args['query']}'"
-                    edit_log.append(entry); _add_changelog_entry("web_search", entry)
+                    entry = {"icon": "✅", "text": f"Searched web for '{args['query']}'", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("web_search", entry["text"])
                     await _update_live_log()
                     return result[:1500]
 
                 if name == "wikipedia_lookup":
                     result = await _wikipedia_lookup(args["query"])
-                    entry = f"Looked up '{args['query']}' on Wikipedia"
-                    edit_log.append(entry); _add_changelog_entry("wikipedia_lookup", entry)
+                    entry = {"icon": "✅", "text": f"Looked up '{args['query']}' on Wikipedia", "status": "ok"}
+                    edit_log.append(entry); _add_changelog_entry("wikipedia_lookup", entry["text"])
                     await _update_live_log()
                     return result[:1500]
 
                 return f"Unknown function: {name}"
             except discord.Forbidden:
                 msg = f"Missing permissions for: {name}"
-                edit_log.append(f"[FAILED] {msg}")
+                edit_log.append({"icon": "❌", "text": f"FAILED: {msg}", "status": "failed"})
                 _add_changelog_entry(name, msg, "failed")
                 await _update_live_log()
                 return msg
             except Exception:
                 msg = f"Error in {name}"
-                edit_log.append(f"[FAILED] {msg}")
+                edit_log.append({"icon": "❌", "text": f"FAILED: {msg}", "status": "failed"})
                 _add_changelog_entry(name, msg, "failed")
                 log.exception("Subagent function error: %s", name)
                 await _update_live_log()
@@ -1786,24 +1868,59 @@ class Subagent(commands.Cog, name="Subagent"):
 
         final_text = sanitize_ai_output(final_text, user_message=prompt)
 
-        # Final edit of the status message with complete results
-        embed = discord.Embed(title=f"🤖 {BOT_NAME} Subagent", color=COLOR_OK if edit_log else BOT_COLOR)
-        embed.add_field(name="Request", value=prompt[:1024], inline=False)
+        # Build final embeds — split across multiple embeds if needed
+        final_embeds = []
+        ok_count = sum(1 for e in edit_log if e.get("status") == "ok")
+        fail_count = sum(1 for e in edit_log if e.get("status") == "failed")
+        total = len(edit_log)
+
+        # Embed 1: Request + Summary
+        main_embed = discord.Embed(title=f"🤖 {BOT_NAME} Subagent — Complete", color=COLOR_OK if fail_count == 0 else COLOR_ERR if ok_count == 0 else COLOR_WARN)
+        main_embed.add_field(name="Request", value=prompt[:1024], inline=False)
         if final_text:
-            embed.add_field(name="Summary", value=final_text[:1024], inline=False)
+            main_embed.add_field(name="📋 Summary", value=final_text[:1024], inline=False)
+        status_line = f"✅ {ok_count} succeeded"
+        if fail_count:
+            status_line += f" • ❌ {fail_count} failed"
+        main_embed.add_field(name="📊 Results", value=status_line, inline=False)
+        main_embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+        final_embeds.append(main_embed)
+
+        # Embed 2+: Edit logs split across multiple embeds
         if edit_log:
-            log_text = "\n".join(f"• {e}" for e in edit_log)
-            if len(log_text) > 1024:
-                log_text = log_text[:1020] + "…"
-            embed.add_field(name=f"Edit Log ({len(edit_log)} actions)", value=log_text, inline=False)
-        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+            log_lines = [f"{e['icon']} {e['text']}" for e in edit_log]
+            # Split into chunks of ~15 lines per embed field
+            chunks = []
+            current = []
+            for line in log_lines:
+                current.append(line)
+                if len(current) >= 15:
+                    chunks.append(current)
+                    current = []
+            if current:
+                chunks.append(current)
+
+            for ci, chunk in enumerate(chunks[:5]):
+                log_embed = discord.Embed(title=f"📋 Edit Log (Part {ci+1}/{len(chunks[:5])})", color=BOT_COLOR)
+                log_embed.add_field(name=f"Actions {ci*15+1}–{min((ci+1)*15, total)}", value="\n".join(chunk)[:1024], inline=False)
+                log_embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+                final_embeds.append(log_embed)
+
+        # Edit the status message with the first embed
         try:
-            await status_msg.edit(embed=embed)
+            await status_msg.edit(embed=final_embeds[0])
         except Exception:
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=final_embeds[0], ephemeral=True)
+
+        # Send remaining embeds as followups
+        for extra_embed in final_embeds[1:5]:
+            try:
+                await interaction.followup.send(embed=extra_embed, ephemeral=True)
+            except Exception:
+                pass
 
         if edit_log:
-            log_lines = "\n".join(f"• {e}" for e in edit_log)
+            log_lines = "\n".join(f"{e['icon']} {e['text']}" for e in edit_log)
             await log_action(self.bot, "🤖 Subagent Actions", f"**Owner:** {interaction.user.mention}\n**Request:** {prompt[:200]}\n\n**Edit Log:**\n{log_lines[:1500]}", color=COLOR_OK)
 
     @app_commands.command(name="changelog", description="View the live subagent changelog.")
