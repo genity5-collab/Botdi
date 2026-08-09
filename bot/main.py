@@ -1,85 +1,116 @@
 """
-Nexus — main entrypoint.
-Loads all cogs, syncs slash commands, sets presence, syncs guilds to Studio.
+Discord Bot — Entry point
 """
+
 from __future__ import annotations
 
 import asyncio
+import datetime
+import json
 import logging
-import sys
+import time
+from pathlib import Path
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from config import DISCORD_TOKEN, BOT_PREFIX
-from log_handler import setup_logging
+from cogs.support import SupportView
+import log_handler as _log_handler
 
-setup_logging()
-log = logging.getLogger("nexus")
+DATA_DIR    = Path(__file__).parent / "data"
+STATUS_FILE = DATA_DIR / "status.json"
+DATA_DIR.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+_log_handler.install()
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members          = True
+intents.dm_messages      = True
 
 
-INTENTS = discord.Intents.default()
-INTENTS.message_content = True
-INTENTS.members = True
-INTENTS.guilds = True
-
-
-class Nexus(commands.Bot):
+class Bot(commands.Bot):
     def __init__(self) -> None:
-        super().__init__(command_prefix=BOT_PREFIX, intents=INTENTS, help_command=None)
+        super().__init__(command_prefix=BOT_PREFIX, intents=intents, help_command=None)
+        self._start_time = time.monotonic()
 
     async def setup_hook(self) -> None:
+        self.add_view(SupportView())
         for ext in (
             "cogs.ai_cog",
+            "cogs.moderation",
+            "cogs.support",
+            "cogs.admin",
             "cogs.general",
             "cogs.fun",
-            "cogs.moderation",
-            "cogs.admin",
-            "cogs.support",
-            "cogs.subagent",
-            "cogs.systems",
-            "cogs.studio_cog",
+            "cogs.site",
         ):
-            try:
-                await self.load_extension(ext)
-                log.info("Loaded %s", ext)
-            except Exception as e:
-                log.exception("Failed to load %s: %s", ext, e)
-
+            await self.load_extension(ext)
+            logging.info("Loaded: %s", ext)
         try:
-            synced = await self.tree.sync()
-            log.info("Synced %d slash commands", len(synced))
-        except Exception as e:
-            log.exception("Slash sync failed: %s", e)
+            for guild in self.guilds:
+                try:
+                    self.tree.copy_global_to(guild=guild)
+                    synced = await self.tree.sync(guild=guild)
+                    logging.info("Synced %d slash commands to guild %s", len(synced), guild.name)
+                except Exception as exc:
+                    logging.warning("Guild sync failed for %s: %s", guild.name, exc)
+            global_synced = await self.tree.sync()
+            logging.info("Global sync: %d slash commands", len(global_synced))
+        except Exception as exc:
+            logging.warning("Slash command sync failed: %s", exc)
+        self._write_status.start()
 
     async def on_ready(self) -> None:
-        log.info("Logged in as %s (%s)", self.user, self.user.id if self.user else "?")
+        logging.info("Online as %s (%s) — %d guilds",
+                     self.user, self.user.id, len(self.guilds))
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="Nexus | /help",
+                name="the server | /help",
             )
         )
-        # Sync all guilds to Studio Dashboard
+
+    @tasks.loop(seconds=5)
+    async def _write_status(self) -> None:
         try:
-            import studio_sync
-            for guild in self.guilds:
-                studio_sync.sync_guild(guild)
-            log.info("Synced %d guilds to Studio", len(self.guilds))
-        except Exception as e:
-            log.debug("Guild sync failed: %s", e)
+            STATUS_FILE.write_text(json.dumps({
+                "online":         True,
+                "bot_name":       str(self.user) if self.user else "unknown",
+                "bot_id":         str(self.user.id) if self.user else "",
+                "guild_count":    len(self.guilds),
+                "uptime_seconds": time.monotonic() - self._start_time,
+                "started_at":     datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "last_updated":   datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }, indent=2))
+        except Exception as exc:
+            logging.warning("Status write failed: %s", exc)
+
+    @_write_status.before_loop
+    async def _before_write(self) -> None:
+        await self.wait_until_ready()
 
 
 async def main() -> None:
-    bot = Nexus()
+    bot = Bot()
     try:
-        await bot.start(DISCORD_TOKEN)
-    except KeyboardInterrupt:
-        await bot.close()
+        async with bot:
+            await bot.start(DISCORD_TOKEN)
+    finally:
+        try:
+            STATUS_FILE.write_text(json.dumps({
+                "online": False, "bot_name": "", "bot_id": "",
+                "guild_count": 0, "uptime_seconds": 0,
+                "started_at": "", "last_updated":
+                datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }, indent=2))
+        except Exception:
+            pass
 
 
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        sys.exit(0)
+asyncio.run(main())
