@@ -1,9 +1,7 @@
 """
 Discord Bot — Entry point
 """
-
 from __future__ import annotations
-
 import asyncio
 import datetime
 import json
@@ -18,7 +16,7 @@ from config import DISCORD_TOKEN, BOT_PREFIX
 from cogs.support import SupportView
 import log_handler as _log_handler
 
-DATA_DIR    = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent / "data"
 STATUS_FILE = DATA_DIR / "status.json"
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -30,8 +28,8 @@ _log_handler.install()
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members          = True
-intents.dm_messages      = True
+intents.members = True
+intents.dm_messages = True
 
 
 class Bot(commands.Bot):
@@ -48,27 +46,28 @@ class Bot(commands.Bot):
             "cogs.admin",
             "cogs.general",
             "cogs.fun",
-            "cogs.site",
+            "cogs.site_cog",
         ):
             await self.load_extension(ext)
             logging.info("Loaded: %s", ext)
-        try:
-            for guild in self.guilds:
-                try:
-                    self.tree.copy_global_to(guild=guild)
-                    synced = await self.tree.sync(guild=guild)
-                    logging.info("Synced %d slash commands to guild %s", len(synced), guild.name)
-                except Exception as exc:
-                    logging.warning("Guild sync failed for %s: %s", guild.name, exc)
-            global_synced = await self.tree.sync()
-            logging.info("Global sync: %d slash commands", len(global_synced))
-        except Exception as exc:
-            logging.warning("Slash command sync failed: %s", exc)
         self._write_status.start()
 
     async def on_ready(self) -> None:
-        logging.info("Online as %s (%s) — %d guilds",
-                     self.user, self.user.id, len(self.guilds))
+        logging.info(
+            "Online as %s (%s) — %d guilds",
+            self.user, self.user.id, len(self.guilds),
+        )
+        for guild in self.guilds:
+            try:
+                synced = await self.tree.sync(guild=guild)
+                logging.info("Guild-synced %d command(s) to '%s'.", len(synced), guild.name)
+            except Exception as exc:
+                logging.warning("Guild sync failed for '%s': %s", guild.name, exc)
+        try:
+            global_synced = await self.tree.sync()
+            logging.info("Global-synced %d command(s).", len(global_synced))
+        except Exception as exc:
+            logging.warning("Global sync failed: %s", exc)
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
@@ -80,13 +79,13 @@ class Bot(commands.Bot):
     async def _write_status(self) -> None:
         try:
             STATUS_FILE.write_text(json.dumps({
-                "online":         True,
-                "bot_name":       str(self.user) if self.user else "unknown",
-                "bot_id":         str(self.user.id) if self.user else "",
-                "guild_count":    len(self.guilds),
+                "online": True,
+                "bot_name": str(self.user) if self.user else "unknown",
+                "bot_id": str(self.user.id) if self.user else "",
+                "guild_count": len(self.guilds),
                 "uptime_seconds": time.monotonic() - self._start_time,
-                "started_at":     datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "last_updated":   datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }, indent=2))
         except Exception as exc:
             logging.warning("Status write failed: %s", exc)
