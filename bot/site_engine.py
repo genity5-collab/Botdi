@@ -1,14 +1,15 @@
 """
-App Engineering engine — AI generation with visible thinking, provider fallback,
-build, debug, screenshot, ZIP, live edit log.
+App Engineering engine — AI generation with visible thinking, tool-use simulation,
+dependency support, provider fallback, build, debug, screenshot, ZIP, live edit log.
 
-Pipeline: Prompt → Think (visible) → Plan → Generate → Build → Test → Debug → Screenshot → Preview → Deliver
+Pipeline: Prompt → Think (visible) → Tools (visible) → Generate → Build → Test → Debug → Screenshot → Preview → Deliver
 
 Security:
   - API keys are server-side env vars only (owner's keys, not user keys)
   - User Gemini key is optional and used only for that user's requests
   - Generated code is validated, not executed on the main bot host
   - Scam/phishing/malware prompts are blocked before generation
+  - Dependencies are CDN-only (no npm, no build tools)
 """
 from __future__ import annotations
 
@@ -32,6 +33,9 @@ from config import (
     SITE_FREE_MONTHLY_LIMIT,
     SITE_BLOCKED_KEYWORDS,
     SITE_BLOCKED_PATTERNS,
+    SITE_OPENROUTER_FALLBACK_MODELS,
+    OPENROUTER_API_KEY,
+    OPENROUTER_URL,
 )
 import site_store
 
@@ -40,13 +44,15 @@ log = logging.getLogger(__name__)
 # ── System prompts ────────────────────────────────────────────────────────────
 
 _THINK_SYSTEM = """\
-You are Botdi's App Engineering Thinker. Before generating a website, you think through the plan.
+You are Botdi's App Engineering Thinker. Before generating a website, you think through the plan step by step.
 
 Output ONLY a JSON object:
 {
   "thoughts": ["step 1 of your thinking", "step 2", ...],
+  "tools": ["tool you'd use 1", "tool you'd use 2", ...],
   "plan": "one paragraph describing what you'll build",
   "files_needed": ["index.html", "style.css", "script.js"],
+  "dependencies": ["list of CDN libraries needed, e.g. 'Tailwind CSS', 'Alpine.js', 'Chart.js'"],
   "estimated_complexity": "simple|medium|complex"
 }
 
@@ -54,8 +60,17 @@ Think about:
 - What the user wants and the best way to build it
 - Which sections/components the site needs
 - Color scheme, layout, and responsiveness
+- Any CDN libraries needed (Tailwind, Bootstrap, Alpine.js, Chart.js, Three.js, etc.)
 - Any interactivity needed (JS)
-- Keep it practical. 3-6 thoughts max.
+- Keep it practical. 4-8 thoughts and 2-5 tools max.
+
+Tools can include things like:
+- "Layout planner: choosing flexbox grid structure"
+- "Color picker: selecting a modern palette"
+- "Typography: choosing fonts from Google Fonts"
+- "Dependency manager: adding Tailwind CSS via CDN"
+- "Animation designer: planning transitions"
+- "Responsive tester: ensuring mobile-first design"
 
 Output ONLY the JSON. No markdown, no explanation.
 """
@@ -73,8 +88,8 @@ The JSON must have this exact structure:
     "script.js": "..."
   },
   "summary": "One-line description of what was built",
-  "dependencies": [],
-  "external_requests": [],
+  "dependencies": ["Tailwind CSS", "Alpine.js"],
+  "external_requests": ["cdn.tailwindcss.com", "cdn.jsdelivr.net"],
   "permissions": "Sandbox only"
 }
 
@@ -88,9 +103,12 @@ QUALITY RULES — CRITICAL:
 7. Use modern CSS (flexbox/grid). No tables for layout. No inline styles.
 8. JavaScript should be clean, use modern ES6+. No global pollution.
 9. Do NOT include any API keys, secrets, tokens, or environment variables in the files.
-10. Do NOT reference external build tools or npm packages — pure HTML/CSS/JS only.
-11. If editing an existing project, modify the provided files and return ALL files.
-12. Output ONLY the JSON object. No text before or after.
+10. You MAY use CDN-hosted libraries (Tailwind, Bootstrap, Alpine.js, Chart.js, etc.) via <script>/<link> tags in index.html.
+11. Do NOT use npm, webpack, or any build tools — CDN only.
+12. If editing an existing project, modify the provided files and return ALL files.
+13. List all CDN dependencies in the "dependencies" field.
+14. List all external domains in "external_requests".
+15. Output ONLY the JSON object. No text before or after.
 
 SAFETY — REFUSE THESE REQUESTS:
 - Phishing pages, fake login forms, credential harvesters
@@ -115,8 +133,9 @@ Rules:
 2. Do NOT include any API keys, secrets, or tokens in the files.
 3. Keep all files self-contained HTML/CSS/JS.
 4. Maintain the same quality — polished, responsive, modern.
-5. Do NOT turn the site into a phishing page, scam, or anything malicious.
-6. Output ONLY the JSON object.
+5. You MAY add or remove CDN dependencies as needed.
+6. Do NOT turn the site into a phishing page, scam, or anything malicious.
+7. Output ONLY the JSON object.
 """
 
 _DEBUG_SYSTEM = """\
@@ -146,7 +165,7 @@ def check_prompt_safety(prompt: str) -> tuple[bool, str]:
     return True, ""
 
 
-# ── Provider chain (owner's keys) ─────────────────────────────────────────────
+# ── Provider chain (owner's keys + free fallbacks) ────────────────────────────
 
 async def _call_provider(
     provider: dict[str, str],
@@ -160,7 +179,7 @@ async def _call_provider(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    if provider["name"] == "openrouter":
+    if provider["name"] == "openrouter" or "openrouter" in provider.get("url", ""):
         headers["HTTP-Referer"] = "https://botdi.app"
         headers["X-Title"] = "Botdi App Engineering"
     try:
@@ -186,6 +205,24 @@ async def _call_provider(
         log.warning("[site:%s] timed out", provider["name"])
     except Exception as exc:
         log.warning("[site:%s] %s", provider["name"], exc)
+    return None
+
+
+async def _call_openrouter_free_fallback(messages: list[dict]) -> str | None:
+    """Try additional free OpenRouter models if the main chain fails."""
+    if not OPENROUTER_API_KEY:
+        return None
+    for model in SITE_OPENROUTER_FALLBACK_MODELS:
+        provider = {
+            "name": f"openrouter-{model}",
+            "url": OPENROUTER_URL,
+            "api_key": OPENROUTER_API_KEY,
+            "model": model,
+        }
+        result = await _call_provider(provider, messages, timeout=60.0)
+        if result:
+            log.info("[site] Fallback model worked: %s", model)
+            return result
     return None
 
 
@@ -221,6 +258,10 @@ async def _generate_with_fallback(
         result = await _call_provider(provider, messages)
         if result:
             return result
+    # Extra free OpenRouter fallback models
+    result = await _call_openrouter_free_fallback(messages)
+    if result:
+        return result
     return None
 
 
@@ -320,10 +361,10 @@ def _preview_url(project_id: str) -> str:
     return f"{SITE_PREVIEW_BASE_URL}/{project_id}"
 
 
-def _analyze_project(files: dict[str, str]) -> dict[str, Any]:
+def _analyze_project(files: dict[str, str], dependencies: list[str] | None = None) -> dict[str, Any]:
     file_types = set()
     external_requests: list[str] = []
-    dependencies = 0
+    dep_count = 0
     for fname, content in files.items():
         ext = fname.rsplit(".", 1)[-1] if "." in fname else "unknown"
         file_types.add(ext)
@@ -333,11 +374,14 @@ def _analyze_project(files: dict[str, str]) -> dict[str, Any]:
                 if domain not in external_requests:
                     external_requests.append(domain)
         if ext == "js":
-            dependencies += content.count("import ") + content.count("require(")
+            dep_count += content.count("import ") + content.count("require(")
+    if dependencies:
+        dep_count = max(dep_count, len(dependencies))
     contains = ", ".join(sorted(f.upper() for f in file_types if f in ("html", "css", "js")))
     return {
         "contains": contains or "HTML/CSS/JS",
-        "dependencies": dependencies,
+        "dependencies": dep_count,
+        "cdn_libraries": dependencies or [],
         "external_requests": external_requests if external_requests else None,
         "api_usage": "None",
         "permissions": "Sandbox only",
@@ -350,7 +394,7 @@ async def _think(
     prompt: str, user_gemini_key: str | None = None
 ) -> dict | None:
     """Generate a visible thinking/plan before generating files."""
-    think_prompt = f"User wants: {prompt}\n\nThink through how to build this website."
+    think_prompt = f"User wants: {prompt}\n\nThink through how to build this website. Include tools you'd use and dependencies needed."
     raw = await _generate_with_fallback(_THINK_SYSTEM, think_prompt, user_gemini_key)
     if not raw:
         return None
@@ -383,53 +427,77 @@ async def generate_project(
         log.warning("[site] Blocked prompt: %s — %s", reason, prompt[:100])
         await _progress("blocked", f"🚫 Blocked: {reason}")
         return {
-            "project_id": None,
-            "files": {},
-            "build_status": "blocked",
-            "error": f"Request blocked: {reason}",
-            "preview_url": None,
-            "screenshot": None,
-            "summary": "Blocked by safety filter",
-            "thinking": [],
-            "info": {"contains": "N/A", "dependencies": 0, "external_requests": None, "api_usage": "None", "permissions": "Blocked"},
+            "project_id": None, "files": {}, "build_status": "blocked",
+            "error": f"Request blocked: {reason}", "preview_url": None,
+            "screenshot": None, "summary": "Blocked by safety filter",
+            "thinking": [], "tools": [],
+            "info": {"contains": "N/A", "dependencies": 0, "cdn_libraries": [], "external_requests": None, "api_usage": "None", "permissions": "Blocked"},
         }
 
     project = await site_store.create_project(user_id, prompt)
     pid = project["id"]
 
     # ── Thinking phase (visible to user) ──────────────────────────────────────
-    await _progress("thinking", "🧠 Thinking...")
+    await _progress("thinking", "🧠 Analyzing your request...")
     thinking = await _think(prompt, user_gemini_key)
     thoughts: list[str] = []
+    tools: list[str] = []
+    dependencies: list[str] = []
     if thinking:
         thoughts = thinking.get("thoughts", [])
+        tools = thinking.get("tools", [])
+        dependencies = thinking.get("dependencies", [])
         plan = thinking.get("plan", "")
+
+        # Show each thought with a small delay
         for i, thought in enumerate(thoughts):
             await _progress("thinking", f"🧠 {thought}")
-            await asyncio.sleep(0.3)  # small delay so users can read
+            await asyncio.sleep(0.4)
+
+        # Show tools being "run"
+        if tools:
+            await _progress("tools", f"🔧 Running tools ({len(tools)})...")
+            for tool in tools:
+                await _progress("tools", f"🔧 {tool}")
+                await asyncio.sleep(0.3)
+
+        # Show dependencies being added
+        if dependencies:
+            await _progress("deps", f"📦 Adding dependencies: {', '.join(dependencies)}")
+            await site_store.add_edit_log_entry(pid, f"Dependencies: {', '.join(dependencies)}", [], "planning")
+        else:
+            await _progress("deps", "📦 No external dependencies needed")
+
         if plan:
             await _progress("planning", f"📋 Plan: {plan[:200]}")
-        await site_store.add_edit_log_entry(pid, f"AI thought through the approach ({len(thoughts)} steps)", [], "planning")
+        await site_store.add_edit_log_entry(pid, f"AI thought through approach ({len(thoughts)} steps, {len(tools)} tools)", [], "planning")
 
     # ── Generate files ─────────────────────────────────────────────────────────
-    await _progress("generating", "⚙️ Generating files...")
+    await _progress("generating", "⚙️ Writing HTML/CSS/JS files...")
     ai_prompt = f"Build a website with this description:\n\n{prompt}\n\n"
-    if thinking and thinking.get("plan"):
-        ai_prompt += f"Plan to follow:\n{thinking['plan']}\n\n"
+    if thinking:
+        if thinking.get("plan"):
+            ai_prompt += f"Plan to follow:\n{thinking['plan']}\n\n"
+        if dependencies:
+            ai_prompt += f"Use these CDN dependencies: {', '.join(dependencies)}\n\n"
     ai_prompt += "Generate all files now."
     raw = await _generate_with_fallback(_ENGINEER_SYSTEM, ai_prompt, user_gemini_key)
     if not raw:
-        await _progress("failed", "❌ All AI providers unavailable")
+        await _progress("failed", "❌ All AI providers unavailable (tried Groq, OpenRouter free models, Fireworks)")
         await site_store.update_project(pid, {"build_status": "failed"})
         await site_store.add_edit_log_entry(pid, "Generation failed — no AI provider available", [], "failed")
         return None
     parsed = _extract_json(raw)
     if not parsed or "files" not in parsed:
-        await _progress("failed", "❌ Invalid AI response")
+        await _progress("failed", "❌ Invalid AI response — couldn't parse files")
         await site_store.update_project(pid, {"build_status": "failed"})
         await site_store.add_edit_log_entry(pid, "Generation failed — invalid AI response", [], "failed")
         return None
     files = _strip_secrets(parsed["files"])
+    # Update dependencies from actual generated files
+    actual_deps = parsed.get("dependencies", [])
+    if actual_deps:
+        dependencies = actual_deps
     if not files:
         await _progress("blocked", "🚫 Blocked by safety policy")
         await site_store.update_project(pid, {"build_status": "blocked"})
@@ -438,21 +506,21 @@ async def generate_project(
             "project_id": pid, "files": {}, "build_status": "blocked",
             "error": "Request blocked by safety policy",
             "preview_url": None, "screenshot": None, "summary": "Blocked",
-            "thinking": thoughts,
-            "info": {"contains": "N/A", "dependencies": 0, "external_requests": None, "api_usage": "None", "permissions": "Blocked"},
+            "thinking": thoughts, "tools": tools,
+            "info": {"contains": "N/A", "dependencies": 0, "cdn_libraries": [], "external_requests": None, "api_usage": "None", "permissions": "Blocked"},
         }
 
     # ── Validate & debug ─────────────────────────────────────────────────────
-    await _progress("building", "🧪 Building & testing...")
+    await _progress("building", "🧪 Validating HTML structure...")
     ok, msg = _validate_project(files)
     if not ok:
-        await _progress("debugging", f"🔧 Debugging: {msg}")
+        await _progress("debugging", f"🔧 Found issue: {msg}")
         files, debug_ok, debug_msg = await _auto_debug(pid, files, msg, user_gemini_key, on_progress)
         if not debug_ok:
             await _progress("failed", f"❌ Build failed: {debug_msg}")
             await site_store.update_project(pid, {"build_status": "failed"})
             await site_store.add_edit_log_entry(pid, f"Build failed: {debug_msg}", list(files.keys()), "failed", "failed")
-            return {"project_id": pid, "files": files, "build_status": "failed", "error": debug_msg, "thinking": thoughts}
+            return {"project_id": pid, "files": files, "build_status": "failed", "error": debug_msg, "thinking": thoughts, "tools": tools}
 
     # ── Save & screenshot ─────────────────────────────────────────────────────
     await _progress("success", "✅ Build successful!")
@@ -462,7 +530,7 @@ async def generate_project(
     await site_store.add_edit_log_entry(pid, f"Created project ({', '.join(files_changed)})", files_changed, "success")
     await site_store.save_checkpoint(pid, "Initial build")
 
-    await _progress("screenshot", "📸 Capturing preview...")
+    await _progress("screenshot", "📸 Taking screenshot of your site...")
     screenshot = await _capture_screenshot(files, pid)
     screenshot_path = None
     if screenshot:
@@ -472,18 +540,17 @@ async def generate_project(
         spath.write_bytes(screenshot)
         screenshot_path = str(spath)
         await site_store.update_project(pid, {"screenshot_path": screenshot_path})
+        await _progress("screenshot", "📸 Screenshot captured!")
+    else:
+        await _progress("screenshot", "📸 Screenshot skipped (headless browser unavailable)")
 
     await _progress("done", "✅ Site ready!")
     return {
-        "project_id": pid,
-        "files": files,
-        "build_status": "success",
-        "preview_url": _preview_url(pid),
-        "screenshot": screenshot,
-        "screenshot_path": screenshot_path,
-        "summary": parsed.get("summary", ""),
-        "thinking": thoughts,
-        "info": _analyze_project(files),
+        "project_id": pid, "files": files, "build_status": "success",
+        "preview_url": _preview_url(pid), "screenshot": screenshot,
+        "screenshot_path": screenshot_path, "summary": parsed.get("summary", ""),
+        "thinking": thoughts, "tools": tools,
+        "info": _analyze_project(files, dependencies),
     }
 
 
@@ -493,7 +560,7 @@ async def edit_project(
     user_gemini_key: str | None = None,
     on_progress: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> dict[str, Any] | None:
-    """Edit an existing project. on_progress same as generate_project."""
+    """Edit an existing project."""
 
     async def _progress(key: str, msg: str) -> None:
         if on_progress:
@@ -514,19 +581,27 @@ async def edit_project(
             "project_id": project_id, "files": project["files"],
             "build_status": "blocked", "error": f"Edit blocked: {reason}",
             "preview_url": project.get("preview_url"), "screenshot": None,
-            "summary": "Blocked", "thinking": [],
+            "summary": "Blocked", "thinking": [], "tools": [],
             "info": _analyze_project(project["files"]),
         }
 
     # ── Thinking phase ────────────────────────────────────────────────────────
-    await _progress("thinking", "🧠 Thinking about the edit...")
+    await _progress("thinking", "🧠 Analyzing the edit request...")
     thinking = await _think(edit_prompt, user_gemini_key)
     thoughts: list[str] = []
+    tools: list[str] = []
+    dependencies: list[str] = []
     if thinking:
         thoughts = thinking.get("thoughts", [])
+        tools = thinking.get("tools", [])
+        dependencies = thinking.get("dependencies", [])
         for thought in thoughts:
             await _progress("thinking", f"🧠 {thought}")
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.4)
+        if tools:
+            for tool in tools:
+                await _progress("tools", f"🔧 {tool}")
+                await asyncio.sleep(0.3)
 
     # ── Generate edit ─────────────────────────────────────────────────────────
     await _progress("generating", "⚙️ Generating edit...")
@@ -551,21 +626,21 @@ async def edit_project(
             "project_id": project_id, "files": project["files"],
             "build_status": "blocked", "error": "Edit blocked by safety policy",
             "preview_url": project.get("preview_url"), "screenshot": None,
-            "summary": "Blocked", "thinking": thoughts,
+            "summary": "Blocked", "thinking": thoughts, "tools": tools,
             "info": _analyze_project(project["files"]),
         }
 
     # ── Validate & debug ─────────────────────────────────────────────────────
-    await _progress("building", "🧪 Building & testing...")
+    await _progress("building", "🧪 Validating...")
     ok, msg = _validate_project(files)
     if not ok:
-        await _progress("debugging", f"🔧 Debugging: {msg}")
+        await _progress("debugging", f"🔧 Fixing: {msg}")
         files, debug_ok, debug_msg = await _auto_debug(project_id, files, msg, user_gemini_key, on_progress)
         if not debug_ok:
             await _progress("failed", f"❌ Edit failed: {debug_msg}")
             await site_store.update_project(project_id, {"build_status": "failed"})
             await site_store.add_edit_log_entry(project_id, f"Edit failed: {debug_msg}", list(files.keys()), "failed", "failed")
-            return {"project_id": project_id, "files": files, "build_status": "failed", "error": debug_msg, "thinking": thoughts}
+            return {"project_id": project_id, "files": files, "build_status": "failed", "error": debug_msg, "thinking": thoughts, "tools": tools}
 
     # ── Save & screenshot ─────────────────────────────────────────────────────
     await _progress("success", "✅ Edit applied!")
@@ -589,8 +664,8 @@ async def edit_project(
     return {
         "project_id": project_id, "files": files, "build_status": "success",
         "preview_url": _preview_url(project_id), "screenshot": screenshot,
-        "screenshot_path": screenshot_path, "thinking": thoughts,
-        "info": _analyze_project(files),
+        "screenshot_path": screenshot_path, "thinking": thoughts, "tools": tools,
+        "info": _analyze_project(files, parsed.get("dependencies")),
     }
 
 
@@ -603,13 +678,11 @@ async def _auto_debug(
 ) -> tuple[dict[str, str], bool, str]:
     for attempt in range(SITE_MAX_DEBUG_RETRIES):
         log.info("[site:%s] Debug attempt %d/%d", project_id, attempt + 1, SITE_MAX_DEBUG_RETRIES)
-
         if on_progress:
             try:
                 await on_progress("debugging", f"🔧 Debug attempt {attempt + 1}/{SITE_MAX_DEBUG_RETRIES}: {error[:80]}")
             except Exception:
                 pass
-
         await site_store.add_edit_log_entry(
             project_id, f"Auto-debug attempt {attempt + 1}: {error[:100]}",
             list(files.keys()), "debugging", "in_progress",
@@ -635,10 +708,7 @@ async def _auto_debug(
     return files, False, error
 
 
-# ── Preview server: check if user's sites should be offline ──────────────────
-
 async def is_user_sites_online(user_id: int, is_owner: bool) -> bool:
-    """Returns False if user has 0 credits and is not the bot owner (sites offline)."""
     if is_owner:
         return True
     _, remaining = await site_store.check_site_usage(user_id)

@@ -1,8 +1,8 @@
 """
 Site Cog — /site slash command for App Engineering.
 
-Pipeline: Think → Plan → Generate → Build → Debug → Screenshot → Preview → Deliver
-Shows AI thinking live to the user. Updates progress in real-time.
+Pipeline: Think → Tools → Generate → Build → Debug → Screenshot → Preview → Deliver
+Shows AI thinking, tools being run, dependencies, and live edit log to the user.
 
 Commands:
   /site <description>       — Build or edit a website
@@ -11,8 +11,6 @@ Commands:
   /deleteproject <id>       — Delete a project
   /setkey <api_key>          — Set your own Gemini key (DM only)
   /removekey                — Remove stored key (DM only)
-
-Removed: /siteinfo (merged into /myprojects), unnecessary commands
 """
 from __future__ import annotations
 import io
@@ -68,7 +66,6 @@ class SiteView(discord.ui.View):
         if not entries:
             await interaction.response.send_message("No edits yet.", ephemeral=True)
             return
-        # Build a nice edit log display
         lines = []
         for entry in entries[-20:]:
             ts = entry["timestamp"][:16].replace("T", " ")
@@ -100,7 +97,6 @@ class SiteCog(commands.Cog, name="AppEngineering"):
         is_owner = await _is_bot_owner(self.bot, user.id)
         user_gemini_key = await site_store.get_user_gemini_key(user.id)
 
-        # ── Check usage credits ────────────────────────────────────────────────
         if not is_owner:
             allowed, _ = await site_store.check_site_usage(user.id)
             if not allowed:
@@ -115,7 +111,6 @@ class SiteCog(commands.Cog, name="AppEngineering"):
                 ))
                 return
 
-        # ── Determine if edit or new ───────────────────────────────────────────
         is_edit = False
         target_project_id = project_id
         if project_id:
@@ -139,7 +134,6 @@ class SiteCog(commands.Cog, name="AppEngineering"):
                 target_project_id = latest["id"]
                 is_edit = True
 
-        # ── Consume credit ─────────────────────────────────────────────────────
         if not is_owner:
             consumed, remaining = await site_store.consume_site_message(user.id)
             if not consumed:
@@ -163,35 +157,62 @@ class SiteCog(commands.Cog, name="AppEngineering"):
 
         # ── Live progress callback ─────────────────────────────────────────────
         current_thoughts: list[str] = []
+        current_tools: list[str] = []
         edit_log_lines: list[str] = []
 
         async def on_progress(key: str, msg: str) -> None:
             try:
+                # Track entries
                 if key == "thinking":
-                    current_thoughts.append(msg.replace("🧠 ", ""))
-                    # Show last 3 thoughts
-                    visible = current_thoughts[-3:]
-                    thoughts_text = "\n".join(f"💭 {t}" for t in visible)
-                    desc = f"{msg}\n\n**AI Thinking:**\n{thoughts_text}"
-                elif key == "debugging":
-                    desc = f"{msg}\n\n**Edit Log:**\n```\n" + "\n".join(edit_log_lines[-4:]) + "\n```"
+                    clean = msg.replace("🧠 ", "")
+                    if clean not in current_thoughts:
+                        current_thoughts.append(clean)
+                elif key == "tools":
+                    clean = msg.replace("🔧 ", "").replace("Running tools", "")
+                    if clean.strip() and clean.strip() not in current_tools:
+                        current_tools.append(clean.strip())
                 else:
-                    desc = msg
-                    if current_thoughts:
-                        desc += f"\n\n💭 _AI thought through {len(current_thoughts)} steps_"
-
-                # Update edit log
-                if key in ("building", "debugging", "success", "failed", "blocked", "screenshot", "done", "planning", "generating"):
                     edit_log_lines.append(msg)
-                    if key not in ("thinking",):
-                        desc = f"{msg}\n\n**Edit Log:**\n```\n" + "\n".join(edit_log_lines[-5:]) + "\n```"
+                    clean_log = msg.lstrip("✅❌🚫🔧📸⚙️🧪📋📦✏️🏗️ ")
+                    if clean_log:
+                        edit_log_lines.append(f"  → {clean_log}")
+
+                # Build the live description
+                sections = []
+
+                # Current step
+                sections.append(msg)
+
+                # Thoughts section (show last 4)
+                if current_thoughts:
+                    visible = current_thoughts[-4:]
+                    thoughts_text = "\n".join(f"💭 {t}" for t in visible)
+                    sections.append(f"\n**🧠 AI Thinking:**\n{thoughts_text}")
+
+                # Tools section
+                if current_tools:
+                    tools_text = "\n".join(f"🔧 {t}" for t in current_tools[-4:])
+                    sections.append(f"\n**🔧 Running Tools:**\n{tools_text}")
+
+                # Edit log section (last 6)
+                if edit_log_lines:
+                    log_text = "\n".join(edit_log_lines[-6:])
+                    sections.append(f"\n**📝 Live Edit Log:**\n```\n{log_text[:800]}\n```")
+
+                desc = "\n".join(sections)[:4000]
+
+                color = COLOR_INFO
+                if key in ("failed", "blocked"):
+                    color = COLOR_ERR
+                elif key in ("success", "done", "screenshot"):
+                    color = COLOR_OK
 
                 updated = discord.Embed(
                     title="✏️ Editing Project" if is_edit else "🏗️ App Engineering",
-                    description=desc[:4000],
-                    color=COLOR_INFO if key not in ("failed", "blocked") else COLOR_ERR if key == "failed" else COLOR_WARN,
+                    description=desc,
+                    color=color,
                 )
-                updated.set_footer(text=f"Requested by {user.display_name}")
+                updated.set_footer(text=f"Requested by {user.display_name} • {len(current_thoughts)} thoughts • {len(current_tools)} tools")
                 await progress_msg.edit(embed=updated)
             except Exception as exc:
                 log.debug("[site] Progress update failed: %s", exc)
@@ -242,8 +263,8 @@ class SiteCog(commands.Cog, name="AppEngineering"):
         entries = project.get("edit_log", []) if project else []
         info = result.get("info", {})
         thinking = result.get("thinking", [])
+        tools_used = result.get("tools", [])
 
-        # Build edit log text
         log_text = "\n".join(f"{e['timestamp'][11:16]} — {e['description']}" for e in entries[-8:])[:1000]
 
         embed = discord.Embed(
@@ -257,8 +278,18 @@ class SiteCog(commands.Cog, name="AppEngineering"):
 
         # Show AI thinking
         if thinking:
-            thinking_text = "\n".join(f"💭 {t}" for t in thinking[:5])
+            thinking_text = "\n".join(f"💭 {t}" for t in thinking[:6])
             embed.add_field(name="🧠 AI Thought Process", value=thinking_text[:1000], inline=False)
+
+        # Show tools used
+        if tools_used:
+            tools_text = "\n".join(f"🔧 {t}" for t in tools_used[:5])
+            embed.add_field(name="🔧 Tools Used", value=tools_text[:1000], inline=False)
+
+        # Show dependencies
+        cdn_libs = info.get("cdn_libraries", [])
+        if cdn_libs:
+            embed.add_field(name="📦 Dependencies", value="\n".join(f"• {d}" for d in cdn_libs[:8]), inline=False)
 
         embed.add_field(name="📝 Edit Log", value=f"```\n{log_text}\n```", inline=False)
 

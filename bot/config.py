@@ -27,8 +27,9 @@ COLOR_WARN = 0xF0B132
 COLOR_ERR = 0xED4245
 COLOR_INFO = 0x5865F2
 
-GEMINI_MODEL = "gemini-2.0-flash"
-GEMINI_FALLBACK_MODELS = ["gemini-1.5-pro", "gemini-1.5-flash"]
+# ── AI chat models (free / cheap only — never expensive) ──────────────────────
+GEMINI_MODEL = "gemini-2.0-flash"  # free tier
+GEMINI_FALLBACK_MODELS = ["gemini-1.5-flash"]  # removed gemini-1.5-pro (expensive)
 
 GROQ_MODEL = "llama-3.1-8b-instant"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -37,12 +38,23 @@ CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
 OPENROUTER_MODEL = "meta-llama/llama-3.2-3b-instruct:free"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# ── Site engineering provider chain (all free models) ─────────────────────────
 SITE_GROQ_MODEL = "gpt-oss-20b"
 SITE_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 SITE_OPENROUTER_MODEL = "gpt-oss-20b:free"
 SITE_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 SITE_FIREWORKS_MODEL = "gpt-oss-20b"
 SITE_FIREWORKS_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
+
+# Extra free OpenRouter fallback models for site generation
+SITE_OPENROUTER_FALLBACK_MODELS = [
+    "gpt-oss-20b:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "qwen/qwen-2.5-7b-instruct:free",
+]
+
 SITE_PROVIDER_CHAIN = [
     {"name": "groq", "url": SITE_GROQ_URL, "api_key": GROQ_API_KEY, "model": SITE_GROQ_MODEL},
     {"name": "openrouter", "url": SITE_OPENROUTER_URL, "api_key": OPENROUTER_API_KEY, "model": SITE_OPENROUTER_MODEL},
@@ -75,10 +87,17 @@ SITE_BLOCKED_PATTERNS = [
     r"(?i)(?:phishing|spoofing)\s+(?:page|site|link|form)",
 ]
 
-DM_DAILY_LIMIT = 15
-MEMORY_MAX_EXCHANGES = 50
+# ── Strike system escalation ─────────────────────────────────────────────────
+# 1 strike = DM warning + 10 hour timeout
+# 2 strikes = DM warning + 2 day timeout
+# 3 strikes = ban
 STRIKES_FOR_BAN = 3
-STRIKE_TIMEOUT_SECONDS = 86_400
+STRIKE_1_TIMEOUT_SECONDS = 10 * 3600       # 10 hours
+STRIKE_2_TIMEOUT_SECONDS = 2 * 24 * 3600   # 2 days
+STRIKE_TIMEOUT_SECONDS = STRIKE_1_TIMEOUT_SECONDS  # legacy compat
 AUTOMOD_TIMEOUT_SECONDS = 3_600
 FILTER_COOLDOWN_SECONDS = 15
 BLACKLISTED_WORDS: list[str] = []
+
+DM_DAILY_LIMIT = 15
+MEMORY_MAX_EXCHANGES = 50

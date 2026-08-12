@@ -1,8 +1,11 @@
 """Botdi AI assistant for DMs and guild mentions.
 
-Uses owner's API keys (Gemini, Groq, OpenRouter, Cerebras) — never user keys.
+Uses owner's API keys — never user keys.
+Provider chain (all free/cheap): Gemini Flash → Groq → OpenRouter free → Cerebras
 Replies in plain text (no embeds — embeds can truncate content).
 Keeps responses short and conversational.
+
+If Gemini key is cooked (expired/dead), falls back to Groq/OpenRouter/Cerebras automatically.
 """
 from __future__ import annotations
 
@@ -38,7 +41,16 @@ from data_store import add_memory, check_dm_quota, clear_memory, get_memory, sav
 from utils import check_pii_tos, check_profanity_at_bot, clean_ai_output, log_action
 
 log = logging.getLogger(__name__)
-_gemini = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+# Only initialize Gemini if key exists — don't crash if key is missing/expired
+_gemini = None
+if GEMINI_API_KEY:
+    try:
+        _gemini = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as exc:
+        log.warning("Gemini client init failed (key may be expired): %s", exc)
+        _gemini = None
+
 _owners: set[int] = set()
 
 _SYSTEM = """\
@@ -64,6 +76,14 @@ _BLOCKED = (
     "how to kill", "suicide method", "ignore your rules", "jailbreak",
 )
 
+# Extra free OpenRouter fallback models for AI chat
+_FREE_OPENROUTER_MODELS = [
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "qwen/qwen-2.5-7b-instruct:free",
+]
+
 
 async def _compat(url: str, key: str, model: str, messages: list[dict[str, str]]) -> str | None:
     if not key:
@@ -86,8 +106,19 @@ async def _compat(url: str, key: str, model: str, messages: list[dict[str, str]]
         return None
 
 
+async def _try_openrouter_free(messages: list[dict]) -> str | None:
+    """Try multiple free OpenRouter models as fallback."""
+    if not OPENROUTER_API_KEY:
+        return None
+    for model in _FREE_OPENROUTER_MODELS:
+        result = await _compat(OPENROUTER_URL, OPENROUTER_API_KEY, model, messages)
+        if result:
+            return result
+    return None
+
+
 async def _generate(history: list[dict[str, str]], query: str) -> str | None:
-    # Try Gemini first (if owner key configured)
+    # Try Gemini Flash first (free tier — only if key is working)
     if _gemini is not None:
         context = "\n".join(f"{item['role']}: {item['content']}" for item in history[-12:])
         prompt = f"{_SYSTEM}\n\nConversation:\n{context}\n\nUser: {query}"
@@ -100,18 +131,27 @@ async def _generate(history: list[dict[str, str]], query: str) -> str | None:
                 if response.text:
                     return clean_ai_output(response.text.strip(), max_len=600)
             except Exception as exc:
-                log.warning("Gemini provider failed: %s", exc)
+                log.warning("Gemini provider failed (key may be expired): %s", exc)
+                break  # If Gemini fails, don't retry other Gemini models — move to fallbacks
 
-    # Fallback chain: Groq → OpenRouter → Cerebras
+    # Fallback chain: Groq → OpenRouter free models → Cerebras
     messages = [{"role": "system", "content": _SYSTEM}, *history[-12:], {"role": "user", "content": query}]
-    for url, key, model in (
-        (GROQ_URL, GROQ_API_KEY, GROQ_MODEL),
-        (OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL),
-        (CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL),
-    ):
-        result = await _compat(url, key, model, messages)
-        if result:
-            return result
+
+    # Groq (fast, free)
+    result = await _compat(GROQ_URL, GROQ_API_KEY, GROQ_MODEL, messages)
+    if result:
+        return result
+
+    # OpenRouter free models (try multiple)
+    result = await _try_openrouter_free(messages)
+    if result:
+        return result
+
+    # Cerebras (fast, free)
+    result = await _compat(CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL, messages)
+    if result:
+        return result
+
     return None
 
 
@@ -171,7 +211,7 @@ class AICog(commands.Cog, name="AI"):
         add_memory(user.id, "user", query)
         add_memory(user.id, "assistant", reply)
         await save_memory()
-        # ── Plain text reply (no embeds — embeds truncate words) ──────────────
+        # Plain text reply (no embeds)
         if remaining is not None and remaining <= 3:
             reply += f"\n\n*({remaining}/{DM_DAILY_LIMIT} DM messages left today)*"
         await message.reply(reply)
