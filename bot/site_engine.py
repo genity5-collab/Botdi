@@ -41,8 +41,10 @@ from config import (
     SITE_BLOCKED_KEYWORDS,
     SITE_BLOCKED_PATTERNS,
     SITE_OPENROUTER_FALLBACK_MODELS,
+    SITE_USE_OWNER_GEMINI,
     OPENROUTER_API_KEY,
     OPENROUTER_URL,
+    GEMINI_API_KEY,
 )
 import site_store
 
@@ -250,6 +252,27 @@ async def _call_user_gemini(api_key: str, messages: list[dict]) -> str | None:
         return None
 
 
+async def _call_owner_gemini(messages: list[dict]) -> str | None:
+    """Use the bot owner's Gemini key as a last-resort fallback."""
+    if not GEMINI_API_KEY:
+        return None
+    try:
+        from google import genai
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        prompt = messages[0]["content"] + "\n\n" + messages[-1]["content"]
+        resp = await asyncio.wait_for(
+            client.aio.models.generate_content(model="gemini-2.0-flash", contents=prompt),
+            timeout=45.0,
+        )
+        if resp.text:
+            log.info("[site] Owner Gemini fallback worked")
+            return resp.text.strip()
+        return None
+    except Exception as exc:
+        log.warning("[site:owner-gemini] %s", exc)
+        return None
+
+
 async def _generate_with_chain(
     system: str,
     user_prompt: str,
@@ -275,6 +298,11 @@ async def _generate_with_chain(
     result = await _call_openrouter_free_fallback(messages)
     if result:
         return result
+    # Owner's Gemini key as last resort (if all gpt-oss models are down)
+    if SITE_USE_OWNER_GEMINI and GEMINI_API_KEY:
+        result = await _call_owner_gemini(messages)
+        if result:
+            return result
     return None
 
 

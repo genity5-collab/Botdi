@@ -1,16 +1,19 @@
 """
 Moderation Cog — /strike, /kick, /ban, /strikes, /mute, /unmute, /warn, /purge, /slowmode, /lock, /unlock
-                  /nuke, /roleinfo, /roleadd, /roletake, /cleanban, /softban, /timeoutinfo
+                  /nuke, /roleinfo, /roleadd, /roletake, /cleanban, /softban, /timeoutinfo, /resetstrikes
 
 Strike escalation:
-  1 strike = DM warning + 10 hour timeout
-  2 strikes = DM warning + 2 day timeout
+  1 strike = DM warning (with appeal button) + 10 hour timeout
+  2 strikes = DM warning (with appeal button) + 2 day timeout
   3 strikes = ban (strikes reset)
+
+The strike DM includes an "Appeal" button that opens a DM support ticket automatically.
 """
 from __future__ import annotations
 import re
 import time
 import datetime
+import logging
 
 import discord
 from discord.ext import commands
@@ -26,6 +29,8 @@ from config import (
 )
 from data_store import add_strike, get_strikes, reset_strikes
 from utils import build_appeal_embed, log_action, parse_user_id
+
+log = logging.getLogger("moderation")
 
 _BLACKLIST: list[str] = [w.lower() for w in BLACKLISTED_WORDS]
 
@@ -76,26 +81,94 @@ def _strike_timeout_seconds(strike_num: int) -> int:
         return STRIKE_1_TIMEOUT_SECONDS
 
 
+class AppealButtonView(discord.ui.View):
+    """Persistent view with an Appeal button that opens a DM ticket."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Appeal Strike", style=discord.ButtonStyle.secondary, emoji="⚖️", custom_id="strike:appeal")
+    async def appeal_btn(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        user = interaction.user
+        # Check if they already have an open ticket
+        from data_store import get_user_open_ticket, create_ticket
+        existing = await get_user_open_ticket(user.id)
+        if existing:
+            await interaction.response.send_message(
+                f"You already have an open ticket (`#{existing}`). Please continue there.",
+                ephemeral=True,
+            )
+            return
+        # Create a Strike Report ticket
+        tid = await create_ticket(user.id, "Strike Report")
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title=f"🎫 Ticket #{tid} — Strike Report",
+                description=(
+                    "Your appeal ticket has been opened!\n\n"
+                    "**Next step:** Describe your appeal in your next message. "
+                    "Staff will review it and respond.\n\n"
+                    f"Ticket ID: **#{tid}**"
+                ),
+                color=COLOR_OK,
+            ),
+            ephemeral=True,
+        )
+        # Notify admin channel
+        from config import ADMIN_CHANNEL_ID
+        bot_instance = interaction.client
+        admin_channel = bot_instance.get_channel(ADMIN_CHANNEL_ID)
+        if admin_channel:
+            embed = discord.Embed(
+                title=f"⚖️ Strike Appeal #{tid}",
+                description=(
+                    f"**User:** {user.mention} (`{user.id}`)\n"
+                    f"**Category:** Strike Report (via appeal button)\n\n"
+                    f"Reply: `/reply {tid} <message>`\n"
+                    f"Close: `/close {tid}` or `/decline {tid} <reason>`"
+                ),
+                color=COLOR_WARN,
+                timestamp=discord.utils.utcnow(),
+            )
+            await admin_channel.send(embed=embed)
+        await log_action(
+            bot_instance, "⚖️ Strike Appeal Opened",
+            f"**Ticket:** #{tid}\n**User:** {user.mention} (`{user.id}`)",
+            color=COLOR_WARN,
+        )
+
+
 def _strike_dm_embed(strike_num: int, reason: str) -> discord.Embed:
     if strike_num >= STRIKES_FOR_BAN:
-        return build_appeal_embed(reason)
+        embed = build_appeal_embed(reason)
+        embed.title = f"🔨 You have been banned ({STRIKES_FOR_BAN} strikes)"
+        embed.description = (
+            f"**Reason:** {reason}\n\n"
+            f"You have reached {STRIKES_FOR_BAN} strikes and have been banned.\n\n"
+            f"Click the **Appeal Strike** button below to open an appeal ticket."
+        )
+        embed.color = COLOR_ERR
+        return embed
 
     if strike_num == 2:
         timeout_text = "2 days"
-        next_text = "One more strike and you will be **banned**."
+        next_text = "⚠️ One more strike and you will be **banned**."
         color = COLOR_ERR
+        title = "⚠️ Strike 2 — 2 Day Timeout"
     else:
         timeout_text = "10 hours"
         next_text = "Next strike: 2 day timeout + warning. Strike 3 = ban."
         color = COLOR_WARN
+        title = "⚠️ Strike 1 — 10 Hour Timeout"
 
     embed = discord.Embed(
-        title="⚠️ You received a strike",
+        title=title,
         description=(
             f"**Reason:** {reason}\n"
             f"**Strike count:** {strike_num}/{STRIKES_FOR_BAN}\n\n"
             f"**Action taken:** {timeout_text} timeout\n\n"
-            f"{next_text}"
+            f"{next_text}\n\n"
+            f"Click the **Appeal Strike** button below to open an appeal ticket."
         ),
         color=color,
         timestamp=discord.utils.utcnow(),
@@ -115,8 +188,15 @@ class Moderation(commands.Cog, name="Moderation"):
         target: discord.Member | discord.User,
         reason: str,
         moderator: discord.Member | discord.User,
-    ) -> None:
+    ) -> tuple[int, str]:
+        """Apply a strike. Returns (strike_count_after, action_taken_text)."""
+        # Get current strikes BEFORE adding
+        before = await get_strikes(target.id)
+        log.info("Strike: user=%s current_strikes=%d, adding 1", target.id, before)
+
         total = await add_strike(target.id)
+        log.info("Strike: user=%s new_strikes=%d", target.id, total)
+
         member: discord.Member | None = guild.get_member(target.id)
         if member is None:
             try:
@@ -127,6 +207,7 @@ class Moderation(commands.Cog, name="Moderation"):
         action_taken = _strike_action_text(total)
 
         if total >= STRIKES_FOR_BAN:
+            # ── Strike 3 = ban ──────────────────────────────────────────────────
             await reset_strikes(target.id)
             try:
                 if member:
@@ -137,6 +218,7 @@ class Moderation(commands.Cog, name="Moderation"):
             except discord.Forbidden:
                 action_taken = f"Strike {total} — ban failed (missing permissions)"
         elif member:
+            # ── Strike 1 or 2 = timeout + DM warning with appeal button ──────────
             timeout_secs = _strike_timeout_seconds(total)
             until = discord.utils.utcnow() + datetime.timedelta(seconds=timeout_secs)
             try:
@@ -148,10 +230,12 @@ class Moderation(commands.Cog, name="Moderation"):
             except discord.Forbidden:
                 action_taken = f"Strike {total} issued (timeout failed — missing permissions)"
 
+        # ── DM the user with appeal button ─────────────────────────────────────
         try:
             dm = await target.create_dm()
             embed = _strike_dm_embed(total, reason)
-            await dm.send(embed=embed)
+            view = AppealButtonView()
+            await dm.send(embed=embed, view=view)
         except discord.HTTPException:
             pass
 
@@ -162,6 +246,7 @@ class Moderation(commands.Cog, name="Moderation"):
             f"**Reason:** {reason}\n**Outcome:** {action_taken}\n"
             f"**Strike count:** {total}/{STRIKES_FOR_BAN}",
         )
+        return total, action_taken
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -216,16 +301,13 @@ class Moderation(commands.Cog, name="Moderation"):
         except discord.NotFound:
             await ctx.send("❌ User not found.", delete_after=10)
             return
-        # Check if they'll be banned
-        current = await get_strikes(target.id)
-        will_ban = current + 1 >= STRIKES_FOR_BAN
-        await self.apply_strike(ctx.guild, target, reason, ctx.author)
-        total = await get_strikes(target.id)
-        if will_ban:
+        total, action_taken = await self.apply_strike(ctx.guild, target, reason, ctx.author)
+        if total >= STRIKES_FOR_BAN:
             await ctx.send(f"🔨 {target.mention} has been **banned** (reached {STRIKES_FOR_BAN} strikes).", delete_after=15)
+        elif total == 2:
+            await ctx.send(f"⚠️ Strike 2 issued to {target.mention}. **2 day timeout** + DM warning with appeal button. They now have **{total}/{STRIKES_FOR_BAN}** strikes.", delete_after=15)
         else:
-            timeout_text = "10 hour" if total == 1 else "2 day"
-            await ctx.send(f"⚠️ Strike {total} issued to {target.mention}. **{timeout_text} timeout** + DM warning. They now have **{total}/{STRIKES_FOR_BAN}** strikes.", delete_after=15)
+            await ctx.send(f"⚠️ Strike 1 issued to {target.mention}. **10 hour timeout** + DM warning with appeal button. They now have **{total}/{STRIKES_FOR_BAN}** strikes.", delete_after=15)
 
     @commands.hybrid_command(name="kick", description="Kick a member from the server")
     @commands.has_permissions(kick_members=True)
@@ -277,15 +359,21 @@ class Moderation(commands.Cog, name="Moderation"):
         except discord.Forbidden:
             await ctx.send("❌ Missing permissions to ban this user.", delete_after=10)
             return
+        except discord.HTTPException as e:
+            # delete_message_days deprecated in newer discord.py, try without
+            try:
+                await ctx.guild.ban(target, reason=f"{ctx.author}: {reason}")
+            except discord.Forbidden:
+                await ctx.send("❌ Missing permissions.", delete_after=10)
+                return
         await log_action(self.bot, "🔨 Member Banned",
-                         f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}\n**Deleted msgs:** {delete_days}d")
+                         f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}")
         await ctx.send(f"✅ **{target}** has been banned.", delete_after=15)
 
     @commands.hybrid_command(name="softban", description="Ban then immediately unban to kick + delete messages")
     @commands.has_permissions(ban_members=True)
     @discord.app_commands.describe(user="User ID or @mention", reason="Reason for the softban")
     async def softban_cmd(self, ctx: commands.Context, user: str, *, reason: str = "No reason provided") -> None:
-        """Ban and immediately unban — effectively a kick that deletes recent messages."""
         uid = parse_user_id(user)
         if uid is None:
             await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
@@ -302,8 +390,12 @@ class Moderation(commands.Cog, name="Moderation"):
             await ctx.send("❌ Missing permissions.", delete_after=10)
             return
         except discord.HTTPException:
-            await ctx.send("❌ Softban failed.", delete_after=10)
-            return
+            try:
+                await ctx.guild.ban(target, reason=f"Softban by {ctx.author}: {reason}")
+                await ctx.guild.unban(target, reason=f"Softban unban")
+            except discord.HTTPException:
+                await ctx.send("❌ Softban failed.", delete_after=10)
+                return
         await log_action(self.bot, "🔨 Member Softbanned",
                          f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}")
         await ctx.send(f"✅ **{target}** has been softbanned (kicked + messages deleted).", delete_after=15)
@@ -312,7 +404,6 @@ class Moderation(commands.Cog, name="Moderation"):
     @commands.has_permissions(ban_members=True, manage_messages=True)
     @discord.app_commands.describe(user="User ID or @mention", reason="Reason for the ban")
     async def cleanban_cmd(self, ctx: commands.Context, user: str, *, reason: str = "No reason provided") -> None:
-        """Ban + purge all their messages from the last 24h across the guild."""
         uid = parse_user_id(user)
         if uid is None:
             await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
@@ -322,7 +413,6 @@ class Moderation(commands.Cog, name="Moderation"):
         except discord.NotFound:
             await ctx.send("❌ User not found.", delete_after=10)
             return
-        # Delete messages from the last 24h
         after = discord.utils.utcnow() - datetime.timedelta(hours=24)
         deleted_count = 0
         for channel in ctx.guild.text_channels:
@@ -334,7 +424,7 @@ class Moderation(commands.Cog, name="Moderation"):
             except (discord.Forbidden, discord.HTTPException):
                 continue
         try:
-            await ctx.guild.ban(target, reason=f"{ctx.author}: {reason}", delete_message_days=1)
+            await ctx.guild.ban(target, reason=f"{ctx.author}: {reason}")
         except discord.Forbidden:
             await ctx.send("❌ Missing permissions to ban.", delete_after=10)
             return
@@ -472,7 +562,6 @@ class Moderation(commands.Cog, name="Moderation"):
     @commands.hybrid_command(name="nuke", description="Delete all messages in this channel and recreate it")
     @commands.has_permissions(manage_channels=True)
     async def nuke_cmd(self, ctx: commands.Context) -> None:
-        """Nuke the channel — clone it, delete the old one. Preserves permissions and position."""
         position = ctx.channel.position
         new_channel = await ctx.channel.clone(reason=f"Nuke by {ctx.author}")
         await new_channel.edit(position=position)

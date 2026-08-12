@@ -39,7 +39,7 @@ OPENROUTER_MODEL = "meta-llama/llama-3.2-3b-instruct:free"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # ── Site engineering: SEPARATE chains for generation vs debugging ─────────────
-# Generation (better UI quality): Groq gpt-oss-20b → Fireworks → OpenRouter free fallbacks
+# Generation (better UI quality): Groq gpt-oss-20b → OpenRouter → Gemini → Fireworks
 SITE_GROQ_MODEL = "gpt-oss-20b"
 SITE_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 SITE_OPENROUTER_MODEL = "gpt-oss-20b:free"
@@ -47,27 +47,30 @@ SITE_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 SITE_FIREWORKS_MODEL = "gpt-oss-20b"
 SITE_FIREWORKS_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
 
-# Generation chain: Groq first (best quality for UI), then fallbacks
+# Generation chain: Groq → OpenRouter → Fireworks → then Gemini (owner's key) as last resort
 SITE_GENERATE_CHAIN = [
     {"name": "groq", "url": SITE_GROQ_URL, "api_key": GROQ_API_KEY, "model": SITE_GROQ_MODEL},
-    {"name": "fireworks", "url": SITE_FIREWORKS_URL, "api_key": FIREWORKS_API_KEY, "model": SITE_FIREWORKS_MODEL},
     {"name": "openrouter", "url": SITE_OPENROUTER_URL, "api_key": OPENROUTER_API_KEY, "model": SITE_OPENROUTER_MODEL},
+    {"name": "fireworks", "url": SITE_FIREWORKS_URL, "api_key": FIREWORKS_API_KEY, "model": SITE_FIREWORKS_MODEL},
 ]
 
-# Debug chain: OpenRouter free first (for fixing errors), then Groq
+# Debug chain: OpenRouter free first, then Groq, then Fireworks
 SITE_DEBUG_CHAIN = [
     {"name": "openrouter", "url": SITE_OPENROUTER_URL, "api_key": OPENROUTER_API_KEY, "model": SITE_OPENROUTER_MODEL},
     {"name": "groq", "url": SITE_GROQ_URL, "api_key": GROQ_API_KEY, "model": SITE_GROQ_MODEL},
     {"name": "fireworks", "url": SITE_FIREWORKS_URL, "api_key": FIREWORKS_API_KEY, "model": SITE_FIREWORKS_MODEL},
 ]
 
-# Think chain: same as generate (Groq for better planning)
+# Think chain: same as generate
 SITE_THINK_CHAIN = SITE_GENERATE_CHAIN
+
+# Owner's Gemini key as last-resort fallback for site generation
+SITE_USE_OWNER_GEMINI = True  # If all gpt-oss providers fail, use owner's Gemini key
 
 # Legacy compat
 SITE_PROVIDER_CHAIN = SITE_GENERATE_CHAIN
 
-# Extra free OpenRouter fallback models
+# Extra free OpenRouter fallback models (if all gpt-oss models are down)
 SITE_OPENROUTER_FALLBACK_MODELS = [
     "gpt-oss-20b:free",
     "meta-llama/llama-3.2-3b-instruct:free",
@@ -83,7 +86,7 @@ SITE_PREVIEW_EXPIRY_HOURS = 24
 SITE_MAX_PROJECTS_PER_USER = 10
 
 # ── Ticket auto-close ────────────────────────────────────────────────────────
-TICKET_AUTO_CLOSE_HOURS = 12  # Auto-close tickets after 12 hours of inactivity
+TICKET_AUTO_CLOSE_HOURS = 12
 
 # ── Scam / suspicious website prevention ─────────────────────────────────────
 SITE_BLOCKED_KEYWORDS: list[str] = [

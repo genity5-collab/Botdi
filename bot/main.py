@@ -56,6 +56,7 @@ class Bot(commands.Bot):
             "cogs.general",
             "cogs.fun",
             "cogs.site_cog",
+            "cogs.create_cog",
         ):
             try:
                 await self.load_extension(ext)

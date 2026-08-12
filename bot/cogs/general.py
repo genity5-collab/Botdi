@@ -135,6 +135,16 @@ class General(commands.Cog, name="General"):
             "`/roll` `/flip` `/8ball` `/poll`\n"
             "`/avatar` `/botinfo` `/snipe` `/afk`"
         ), inline=False)
+        embed.add_field(name="📝 Create", value=(
+            "`/create channel` — Text/voice/announcement channel\n"
+            "`/create text` — Text channel with topic\n"
+            "`/create voice` — Voice channel with user limit\n"
+            "`/create category` — New category\n"
+            "`/create role` — Role with color\n"
+            "`/create emoji` — Emoji from image URL\n"
+            "`/create stage` — Stage channel\n"
+            "`/create forum` — Forum channel"
+        ), inline=False)
         embed.add_field(name="ℹ️ General", value=(
             "`/ping` `/uptime` `/userinfo`\n"
             "`/serverinfo` `/help`"
