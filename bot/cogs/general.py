@@ -98,68 +98,42 @@ class General(commands.Cog, name="General"):
     @commands.hybrid_command(name="help", description="Show all available commands")
     async def help_cmd(self, ctx: commands.Context) -> None:
         embed = discord.Embed(
-            title="📖 Command Reference",
-            description="All available commands. `<required>` `[optional]`\n"
-                       "Every command works as a **slash command** (type `/` in Discord) or with the `!` prefix.",
+            title="📖 Botdi Commands",
+            description="All commands work as **slash commands** (type `/`) or with `!` prefix.",
             color=BOT_COLOR,
         )
         embed.add_field(name="🤖 AI", value=(
             "`@Botdi` — Ask anything (guild)\n"
-            "Say `botdi` anywhere — no @ needed!\n"
-            "💬 **DM me directly** — unlimited private chat\n"
-            "`@Botdi I'm being bullied by @user` — Trigger anti-bully investigation\n"
-            "*Say `forget me` in DMs to clear your chat history*"
-        ), inline=False)
-        embed.add_field(name="⚠️ Moderation", value=(
-            "`/strike <user> [reason]` — Issue a strike\n"
-            "`/strikes <user>` — View strike count\n"
-            "`/mute <user> [minutes] [reason]` — Timeout a user\n"
-            "`/unmute <user>` — Remove timeout\n"
-            "`/warn <user> [reason]` — Send a warning DM\n"
-            "`/kick <user> [reason]` — Kick a member\n"
-            "`/ban <user> [reason]` — Ban a member\n"
-            "`/purge <1–100>` — Delete recent messages\n"
-            "`/slowmode <seconds>` — Set channel slowmode\n"
-            "`/lock [#channel]` — Lock channel\n"
-            "`/unlock [#channel]` — Unlock channel"
-        ), inline=False)
-        embed.add_field(name="🎫 Support", value=(
-            "`/ticket` — Open a support ticket\n"
-            "`/reply <ticket_id> <message>` — Reply to a ticket (staff)\n"
-            "`/close <ticket_id>` — Close a ticket (staff)"
+            "DM me directly — private chat\n"
+            "Say `forget me` in DMs to clear history"
         ), inline=False)
         embed.add_field(name="🏗️ App Engineering", value=(
-            "`/site <description>` — Build a website from a description\n"
-            "`/site <description> project_id:<id>` — Edit an existing project\n"
+            "`/site <description>` — Build a website\n"
+            "`/site <edit>` — Edit your latest project\n"
             "`/myprojects` — List your projects\n"
-            "`/siteinfo <project_id>` — Show project details\n"
-            "`/setkey <api_key>` — Set your own Gemini API key (DM only)\n"
-            "`/removekey` — Remove your stored API key (DM only)"
+            "`/sitecredits` — Check remaining credits\n"
+            "`/deleteproject <id>` — Delete a project\n"
+            "`/setkey <key>` — Add your Gemini key (DM only)\n"
+            "`/removekey` — Remove your key (DM only)"
         ), inline=False)
-        embed.add_field(name="📢 Admin", value=(
-            '`/embed <#channel> "Title" <description>` — Post a branded embed'
+        embed.add_field(name="⚠️ Moderation", value=(
+            "`/strike` `/strikes` `/mute` `/unmute`\n"
+            "`/warn` `/kick` `/ban` `/purge`\n"
+            "`/slowmode` `/lock` `/unlock`"
+        ), inline=False)
+        embed.add_field(name="🎫 Support", value=(
+            "`/ticket` — Open a ticket\n"
+            "`/reply` `/close` — Staff commands"
         ), inline=False)
         embed.add_field(name="🎮 Fun", value=(
-            "`/roll [sides]` — Roll a die\n"
-            "`/flip` — Coin flip\n"
-            "`/8ball <question>` — Magic 8-ball\n"
-            "`/poll <question>` — Yes/no poll\n"
-            "`/choose <opt1 | opt2 | …>` — Pick randomly\n"
-            "`/rps <rock|paper|scissors>` — Play RPS\n"
-            "`/math <expression>` — Calculate\n"
-            "`/avatar [user]` — Show avatar\n"
-            "`/botinfo` — Botdi stats\n"
-            "`/snipe` — Last deleted message (staff)\n"
-            "`/afk [reason]` — Set AFK status"
+            "`/roll` `/flip` `/8ball` `/poll`\n"
+            "`/avatar` `/botinfo` `/snipe` `/afk`"
         ), inline=False)
         embed.add_field(name="ℹ️ General", value=(
-            "`/ping` — Check latency\n"
-            "`/uptime` — Show uptime\n"
-            "`/userinfo [user]` — Show user info\n"
-            "`/serverinfo` — Show server info\n"
-            "`/help` — This menu"
+            "`/ping` `/uptime` `/userinfo`\n"
+            "`/serverinfo` `/help`"
         ), inline=False)
-        embed.set_footer(text="<user> = ID or @mention • [optional]")
+        embed.set_footer(text="Botdi • 5 free /site credits/month • Owner has unlimited")
         await ctx.send(embed=embed)
 
 

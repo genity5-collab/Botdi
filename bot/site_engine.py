@@ -1,13 +1,14 @@
 """
-App Engineering engine — AI generation, provider fallback, build, debug, screenshot, ZIP.
+App Engineering engine — AI generation with visible thinking, provider fallback,
+build, debug, screenshot, ZIP, live edit log.
 
-Pipeline: Prompt -> Plan -> Generate -> Build -> Test -> Debug -> Screenshot -> Preview -> Deliver
+Pipeline: Prompt → Think (visible) → Plan → Generate → Build → Test → Debug → Screenshot → Preview → Deliver
 
 Security:
-  - API keys are server-side env vars only, never sent to Discord or embedded in projects.
-  - Generated code is validated, not executed on the main bot host.
-  - Sandboxed file paths per project.
-  - Scam/phishing/malware prompts are blocked before generation.
+  - API keys are server-side env vars only (owner's keys, not user keys)
+  - User Gemini key is optional and used only for that user's requests
+  - Generated code is validated, not executed on the main bot host
+  - Scam/phishing/malware prompts are blocked before generation
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ import os
 import re
 import shutil
 import zipfile
-from typing import Any
+from typing import Any, Callable, Awaitable
 
 import aiohttp
 
@@ -36,8 +37,31 @@ import site_store
 
 log = logging.getLogger(__name__)
 
+# ── System prompts ────────────────────────────────────────────────────────────
+
+_THINK_SYSTEM = """\
+You are Botdi's App Engineering Thinker. Before generating a website, you think through the plan.
+
+Output ONLY a JSON object:
+{
+  "thoughts": ["step 1 of your thinking", "step 2", ...],
+  "plan": "one paragraph describing what you'll build",
+  "files_needed": ["index.html", "style.css", "script.js"],
+  "estimated_complexity": "simple|medium|complex"
+}
+
+Think about:
+- What the user wants and the best way to build it
+- Which sections/components the site needs
+- Color scheme, layout, and responsiveness
+- Any interactivity needed (JS)
+- Keep it practical. 3-6 thoughts max.
+
+Output ONLY the JSON. No markdown, no explanation.
+"""
+
 _ENGINEER_SYSTEM = """\
-You are Botdi App Engineering, an AI that generates complete, working website projects.
+You are Botdi App Engineering, an AI that generates complete, polished, working website projects.
 
 You output ONLY a single JSON object — no markdown, no explanation, no code fences.
 The JSON must have this exact structure:
@@ -54,14 +78,19 @@ The JSON must have this exact structure:
   "permissions": "Sandbox only"
 }
 
-Rules:
-1. Generate complete, self-contained HTML/CSS/JS files. No placeholders.
+QUALITY RULES — CRITICAL:
+1. Generate complete, self-contained HTML/CSS/JS files. No placeholders, no TODOs.
 2. All CSS goes in style.css, all JS in script.js, HTML in index.html.
-3. Do NOT include any API keys, secrets, tokens, or environment variables in the files.
-4. Do NOT reference external build tools or npm packages — pure HTML/CSS/JS only.
-5. Make the site responsive and modern-looking.
-6. If editing an existing project, modify the provided files and return ALL files.
-7. Output ONLY the JSON object. No text before or after.
+3. Make it VISUALLY POLISHED — modern design, good spacing, smooth transitions, nice colors.
+4. Use CSS custom properties (variables) for theming. Add dark mode if appropriate.
+5. Make it FULLY RESPONSIVE — mobile-first, works on all screen sizes.
+6. Add micro-interactions: hover effects, transitions, subtle animations.
+7. Use modern CSS (flexbox/grid). No tables for layout. No inline styles.
+8. JavaScript should be clean, use modern ES6+. No global pollution.
+9. Do NOT include any API keys, secrets, tokens, or environment variables in the files.
+10. Do NOT reference external build tools or npm packages — pure HTML/CSS/JS only.
+11. If editing an existing project, modify the provided files and return ALL files.
+12. Output ONLY the JSON object. No text before or after.
 
 SAFETY — REFUSE THESE REQUESTS:
 - Phishing pages, fake login forms, credential harvesters
@@ -85,8 +114,9 @@ Rules:
 1. Modify only what the user asked for. Keep working parts intact.
 2. Do NOT include any API keys, secrets, or tokens in the files.
 3. Keep all files self-contained HTML/CSS/JS.
-4. Do NOT turn the site into a phishing page, scam, or anything malicious.
-5. Output ONLY the JSON object.
+4. Maintain the same quality — polished, responsive, modern.
+5. Do NOT turn the site into a phishing page, scam, or anything malicious.
+6. Output ONLY the JSON object.
 """
 
 _DEBUG_SYSTEM = """\
@@ -116,36 +146,12 @@ def check_prompt_safety(prompt: str) -> tuple[bool, str]:
     return True, ""
 
 
-def _check_files_safety(files: dict[str, str]) -> tuple[bool, str]:
-    """Check if generated files contain suspicious patterns."""
-    all_content = " ".join(files.values()).lower()
-    # Check for credential harvesting patterns
-    suspicious_patterns = [
-        r"(?:action|url)\s*=\s*['\"]https?://(?!localhost|127\.0\.0\.1|botdi\.app)",
-        r"(?:fetch|xhr|axios)\s*\(\s*['\"]https?://(?!localhost|127\.0\.0\.1)",
-    ]
-    # Check for form submissions to external URLs (phishing indicator)
-    for fname, content in files.items():
-        if fname.endswith(".html"):
-            forms = re.findall(r"<form[^>]*action\s*=\s*['\"]([^'\"]+)['\"]", content, re.I)
-            for action in forms:
-                if action.startswith("http") and "botdi.app" not in action and "localhost" not in action:
-                    # External form submission — could be legit, just flag it
-                    log.info("[site] External form action detected: %s", action)
-    # Check for embedded credentials
-    for fname, content in files.items():
-        if re.search(r"(?:password|secret|token|api[_-]?key)\s*[:=]\s*['\"][A-Za-z0-9]{15,}['\"]", content, re.I):
-            return False, f"Embedded credentials detected in {fname}"
-    return True, ""
-
-
-# ── Provider chain ────────────────────────────────────────────────────────────
-
+# ── Provider chain (owner's keys) ─────────────────────────────────────────────
 
 async def _call_provider(
     provider: dict[str, str],
     messages: list[dict],
-    timeout: float = 60.0,
+    timeout: float = 90.0,
 ) -> str | None:
     api_key = provider.get("api_key", "")
     if not api_key:
@@ -165,7 +171,7 @@ async def _call_provider(
                 json={
                     "model": provider["model"],
                     "messages": messages,
-                    "max_tokens": 8000,
+                    "max_tokens": 12000,
                     "temperature": 0.4,
                 },
                 timeout=aiohttp.ClientTimeout(total=timeout),
@@ -205,10 +211,12 @@ async def _generate_with_fallback(
         {"role": "system", "content": system},
         {"role": "user", "content": user_prompt},
     ]
+    # User's own Gemini key first (if provided)
     if user_gemini_key:
         result = await _call_user_gemini(user_gemini_key, messages)
         if result:
             return result
+    # Owner's API keys: Groq → OpenRouter → Fireworks
     for provider in SITE_PROVIDER_CHAIN:
         result = await _call_provider(provider, messages)
         if result:
@@ -282,7 +290,7 @@ async def _capture_screenshot(files: dict[str, str], project_id: str) -> bytes |
             browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
             page = await browser.new_page(viewport={"width": 1280, "height": 720})
             await page.set_content(full_html, wait_until="networkidle")
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(2000)
             screenshot = await page.screenshot(type="png")
             await browser.close()
             return screenshot
@@ -336,13 +344,44 @@ def _analyze_project(files: dict[str, str]) -> dict[str, Any]:
     }
 
 
+# ── Thinking phase (visible to users) ─────────────────────────────────────────
+
+async def _think(
+    prompt: str, user_gemini_key: str | None = None
+) -> dict | None:
+    """Generate a visible thinking/plan before generating files."""
+    think_prompt = f"User wants: {prompt}\n\nThink through how to build this website."
+    raw = await _generate_with_fallback(_THINK_SYSTEM, think_prompt, user_gemini_key)
+    if not raw:
+        return None
+    parsed = _extract_json(raw)
+    if not parsed:
+        return None
+    return parsed
+
+
+# ── Main pipeline ─────────────────────────────────────────────────────────────
+
 async def generate_project(
-    prompt: str, user_id: int, user_gemini_key: str | None = None
+    prompt: str,
+    user_id: int,
+    user_gemini_key: str | None = None,
+    on_progress: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> dict[str, Any] | None:
-    # ── Safety check: block scam/phishing/malware prompts ─────────────────────
+    """Generate a new website project. on_progress(status_key, message) is called at each step."""
+
+    async def _progress(key: str, msg: str) -> None:
+        if on_progress:
+            try:
+                await on_progress(key, msg)
+            except Exception:
+                pass
+
+    # ── Safety check ──────────────────────────────────────────────────────────
     safe, reason = check_prompt_safety(prompt)
     if not safe:
         log.warning("[site] Blocked prompt: %s — %s", reason, prompt[:100])
+        await _progress("blocked", f"🚫 Blocked: {reason}")
         return {
             "project_id": None,
             "files": {},
@@ -351,48 +390,79 @@ async def generate_project(
             "preview_url": None,
             "screenshot": None,
             "summary": "Blocked by safety filter",
+            "thinking": [],
             "info": {"contains": "N/A", "dependencies": 0, "external_requests": None, "api_usage": "None", "permissions": "Blocked"},
         }
 
     project = await site_store.create_project(user_id, prompt)
     pid = project["id"]
-    ai_prompt = f"Build a website with this description:\n\n{prompt}\n\nGenerate all files now."
+
+    # ── Thinking phase (visible to user) ──────────────────────────────────────
+    await _progress("thinking", "🧠 Thinking...")
+    thinking = await _think(prompt, user_gemini_key)
+    thoughts: list[str] = []
+    if thinking:
+        thoughts = thinking.get("thoughts", [])
+        plan = thinking.get("plan", "")
+        for i, thought in enumerate(thoughts):
+            await _progress("thinking", f"🧠 {thought}")
+            await asyncio.sleep(0.3)  # small delay so users can read
+        if plan:
+            await _progress("planning", f"📋 Plan: {plan[:200]}")
+        await site_store.add_edit_log_entry(pid, f"AI thought through the approach ({len(thoughts)} steps)", [], "planning")
+
+    # ── Generate files ─────────────────────────────────────────────────────────
+    await _progress("generating", "⚙️ Generating files...")
+    ai_prompt = f"Build a website with this description:\n\n{prompt}\n\n"
+    if thinking and thinking.get("plan"):
+        ai_prompt += f"Plan to follow:\n{thinking['plan']}\n\n"
+    ai_prompt += "Generate all files now."
     raw = await _generate_with_fallback(_ENGINEER_SYSTEM, ai_prompt, user_gemini_key)
     if not raw:
+        await _progress("failed", "❌ All AI providers unavailable")
         await site_store.update_project(pid, {"build_status": "failed"})
         await site_store.add_edit_log_entry(pid, "Generation failed — no AI provider available", [], "failed")
         return None
     parsed = _extract_json(raw)
     if not parsed or "files" not in parsed:
+        await _progress("failed", "❌ Invalid AI response")
         await site_store.update_project(pid, {"build_status": "failed"})
         await site_store.add_edit_log_entry(pid, "Generation failed — invalid AI response", [], "failed")
         return None
     files = _strip_secrets(parsed["files"])
     if not files:
-        # AI refused (safety policy)
+        await _progress("blocked", "🚫 Blocked by safety policy")
         await site_store.update_project(pid, {"build_status": "blocked"})
         await site_store.add_edit_log_entry(pid, "Request blocked by safety policy", [], "blocked")
         return {
-            "project_id": pid,
-            "files": {},
-            "build_status": "blocked",
+            "project_id": pid, "files": {}, "build_status": "blocked",
             "error": "Request blocked by safety policy",
-            "preview_url": None,
-            "screenshot": None,
-            "summary": "Blocked by safety filter",
+            "preview_url": None, "screenshot": None, "summary": "Blocked",
+            "thinking": thoughts,
             "info": {"contains": "N/A", "dependencies": 0, "external_requests": None, "api_usage": "None", "permissions": "Blocked"},
         }
+
+    # ── Validate & debug ─────────────────────────────────────────────────────
+    await _progress("building", "🧪 Building & testing...")
     ok, msg = _validate_project(files)
     if not ok:
-        files, debug_ok, debug_msg = await _auto_debug(pid, files, msg, user_gemini_key)
+        await _progress("debugging", f"🔧 Debugging: {msg}")
+        files, debug_ok, debug_msg = await _auto_debug(pid, files, msg, user_gemini_key, on_progress)
         if not debug_ok:
+            await _progress("failed", f"❌ Build failed: {debug_msg}")
             await site_store.update_project(pid, {"build_status": "failed"})
             await site_store.add_edit_log_entry(pid, f"Build failed: {debug_msg}", list(files.keys()), "failed", "failed")
-            return {"project_id": pid, "files": files, "build_status": "failed", "error": debug_msg}
+            return {"project_id": pid, "files": files, "build_status": "failed", "error": debug_msg, "thinking": thoughts}
+
+    # ── Save & screenshot ─────────────────────────────────────────────────────
+    await _progress("success", "✅ Build successful!")
     await site_store.set_project_files(pid, files)
     await site_store.update_project(pid, {"build_status": "success", "preview_url": _preview_url(pid)})
-    await site_store.add_edit_log_entry(pid, "Created project files", list(files.keys()), "success")
+    files_changed = list(files.keys())
+    await site_store.add_edit_log_entry(pid, f"Created project ({', '.join(files_changed)})", files_changed, "success")
     await site_store.save_checkpoint(pid, "Initial build")
+
+    await _progress("screenshot", "📸 Capturing preview...")
     screenshot = await _capture_screenshot(files, pid)
     screenshot_path = None
     if screenshot:
@@ -402,6 +472,8 @@ async def generate_project(
         spath.write_bytes(screenshot)
         screenshot_path = str(spath)
         await site_store.update_project(pid, {"screenshot_path": screenshot_path})
+
+    await _progress("done", "✅ Site ready!")
     return {
         "project_id": pid,
         "files": files,
@@ -410,30 +482,54 @@ async def generate_project(
         "screenshot": screenshot,
         "screenshot_path": screenshot_path,
         "summary": parsed.get("summary", ""),
+        "thinking": thoughts,
         "info": _analyze_project(files),
     }
 
 
 async def edit_project(
-    project_id: str, edit_prompt: str, user_gemini_key: str | None = None
+    project_id: str,
+    edit_prompt: str,
+    user_gemini_key: str | None = None,
+    on_progress: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> dict[str, Any] | None:
+    """Edit an existing project. on_progress same as generate_project."""
+
+    async def _progress(key: str, msg: str) -> None:
+        if on_progress:
+            try:
+                await on_progress(key, msg)
+            except Exception:
+                pass
+
     project = await site_store.get_project(project_id)
     if not project:
         return None
-    # ── Safety check on edit prompt ────────────────────────────────────────────
+
+    # ── Safety check ──────────────────────────────────────────────────────────
     safe, reason = check_prompt_safety(edit_prompt)
     if not safe:
         log.warning("[site:%s] Blocked edit: %s — %s", project_id, reason, edit_prompt[:100])
         return {
-            "project_id": project_id,
-            "files": project["files"],
-            "build_status": "blocked",
-            "error": f"Edit blocked: {reason}",
-            "preview_url": project.get("preview_url"),
-            "screenshot": None,
-            "summary": "Blocked by safety filter",
+            "project_id": project_id, "files": project["files"],
+            "build_status": "blocked", "error": f"Edit blocked: {reason}",
+            "preview_url": project.get("preview_url"), "screenshot": None,
+            "summary": "Blocked", "thinking": [],
             "info": _analyze_project(project["files"]),
         }
+
+    # ── Thinking phase ────────────────────────────────────────────────────────
+    await _progress("thinking", "🧠 Thinking about the edit...")
+    thinking = await _think(edit_prompt, user_gemini_key)
+    thoughts: list[str] = []
+    if thinking:
+        thoughts = thinking.get("thoughts", [])
+        for thought in thoughts:
+            await _progress("thinking", f"🧠 {thought}")
+            await asyncio.sleep(0.3)
+
+    # ── Generate edit ─────────────────────────────────────────────────────────
+    await _progress("generating", "⚙️ Generating edit...")
     current_files = project["files"]
     ai_prompt = (
         f"Current project files:\n{json.dumps(current_files, indent=2)}\n\n"
@@ -442,33 +538,43 @@ async def edit_project(
     )
     raw = await _generate_with_fallback(_EDIT_SYSTEM, ai_prompt, user_gemini_key)
     if not raw:
+        await _progress("failed", "❌ All AI providers unavailable")
         return None
     parsed = _extract_json(raw)
     if not parsed or "files" not in parsed:
+        await _progress("failed", "❌ Invalid AI response")
         return None
     files = _strip_secrets(parsed["files"])
     if not files:
+        await _progress("blocked", "🚫 Blocked by safety policy")
         return {
-            "project_id": project_id,
-            "files": project["files"],
-            "build_status": "blocked",
-            "error": "Edit blocked by safety policy",
-            "preview_url": project.get("preview_url"),
-            "screenshot": None,
-            "summary": "Blocked by safety filter",
+            "project_id": project_id, "files": project["files"],
+            "build_status": "blocked", "error": "Edit blocked by safety policy",
+            "preview_url": project.get("preview_url"), "screenshot": None,
+            "summary": "Blocked", "thinking": thoughts,
             "info": _analyze_project(project["files"]),
         }
+
+    # ── Validate & debug ─────────────────────────────────────────────────────
+    await _progress("building", "🧪 Building & testing...")
     ok, msg = _validate_project(files)
     if not ok:
-        files, debug_ok, debug_msg = await _auto_debug(project_id, files, msg, user_gemini_key)
+        await _progress("debugging", f"🔧 Debugging: {msg}")
+        files, debug_ok, debug_msg = await _auto_debug(project_id, files, msg, user_gemini_key, on_progress)
         if not debug_ok:
+            await _progress("failed", f"❌ Edit failed: {debug_msg}")
             await site_store.update_project(project_id, {"build_status": "failed"})
             await site_store.add_edit_log_entry(project_id, f"Edit failed: {debug_msg}", list(files.keys()), "failed", "failed")
-            return {"project_id": project_id, "files": files, "build_status": "failed", "error": debug_msg}
+            return {"project_id": project_id, "files": files, "build_status": "failed", "error": debug_msg, "thinking": thoughts}
+
+    # ── Save & screenshot ─────────────────────────────────────────────────────
+    await _progress("success", "✅ Edit applied!")
     await site_store.set_project_files(project_id, files)
     await site_store.update_project(project_id, {"build_status": "success", "preview_url": _preview_url(project_id)})
     await site_store.add_edit_log_entry(project_id, f"Edited: {edit_prompt[:100]}", list(files.keys()), "success")
     await site_store.save_checkpoint(project_id, f"Edit: {edit_prompt[:50]}")
+
+    await _progress("screenshot", "📸 Capturing preview...")
     screenshot = await _capture_screenshot(files, project_id)
     screenshot_path = project.get("screenshot_path")
     if screenshot:
@@ -478,13 +584,12 @@ async def edit_project(
         spath.write_bytes(screenshot)
         screenshot_path = str(spath)
         await site_store.update_project(project_id, {"screenshot_path": screenshot_path})
+
+    await _progress("done", "✅ Edit complete!")
     return {
-        "project_id": project_id,
-        "files": files,
-        "build_status": "success",
-        "preview_url": _preview_url(project_id),
-        "screenshot": screenshot,
-        "screenshot_path": screenshot_path,
+        "project_id": project_id, "files": files, "build_status": "success",
+        "preview_url": _preview_url(project_id), "screenshot": screenshot,
+        "screenshot_path": screenshot_path, "thinking": thoughts,
         "info": _analyze_project(files),
     }
 
@@ -494,9 +599,17 @@ async def _auto_debug(
     files: dict[str, str],
     error: str,
     user_gemini_key: str | None = None,
+    on_progress: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> tuple[dict[str, str], bool, str]:
     for attempt in range(SITE_MAX_DEBUG_RETRIES):
         log.info("[site:%s] Debug attempt %d/%d", project_id, attempt + 1, SITE_MAX_DEBUG_RETRIES)
+
+        if on_progress:
+            try:
+                await on_progress("debugging", f"🔧 Debug attempt {attempt + 1}/{SITE_MAX_DEBUG_RETRIES}: {error[:80]}")
+            except Exception:
+                pass
+
         await site_store.add_edit_log_entry(
             project_id, f"Auto-debug attempt {attempt + 1}: {error[:100]}",
             list(files.keys()), "debugging", "in_progress",

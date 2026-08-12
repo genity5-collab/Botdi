@@ -1,27 +1,25 @@
 """
 Site Cog — /site slash command for App Engineering.
 
-Features:
-  - /site <description> — Generate a new website from natural language
-  - /site <description> — Edit existing project (auto-detected or via project_id)
-  - /setkey — Set your own Gemini API key
-  - /removekey — Remove stored key
-  - /myprojects — List your projects
-  - /deleteproject — Delete a project by ID
+Pipeline: Think → Plan → Generate → Build → Debug → Screenshot → Preview → Deliver
+Shows AI thinking live to the user. Updates progress in real-time.
 
-Security:
-  - Scam/phishing/malware prompts are blocked
-  - 5 monthly free credits for non-owners; owner has unlimited
-  - When credits hit 0, all user's sites go offline until reset
-  - Bot owner always has infinite credits
-  - API keys never exposed in Discord, files, or screenshots
+Commands:
+  /site <description>       — Build or edit a website
+  /myprojects               — List your projects
+  /sitecredits              — Check remaining credits
+  /deleteproject <id>       — Delete a project
+  /setkey <api_key>          — Set your own Gemini key (DM only)
+  /removekey                — Remove stored key (DM only)
+
+Removed: /siteinfo (merged into /myprojects), unnecessary commands
 """
 from __future__ import annotations
 import io
 import logging
 import discord
 from discord.ext import commands
-from config import BOT_COLOR, COLOR_ERR, COLOR_WARN, COLOR_OK, COLOR_INFO, SITE_FREE_MONTHLY_LIMIT
+from config import COLOR_ERR, COLOR_WARN, COLOR_OK, COLOR_INFO, SITE_FREE_MONTHLY_LIMIT
 import site_store
 import site_engine
 from utils import log_action
@@ -38,19 +36,18 @@ async def _is_bot_owner(bot: commands.Bot, user_id: int) -> bool:
 
 
 class SiteView(discord.ui.View):
-    def __init__(self, project_id: str, files: dict[str, str], preview_url: str | None, owner_id: int, is_owner: bool) -> None:
+    def __init__(self, project_id: str, files: dict[str, str], preview_url: str | None, owner_id: int) -> None:
         super().__init__(timeout=300)
         self.project_id = project_id
         self.files = files
         self.preview_url = preview_url
         self.owner_id = owner_id
-        self.is_owner = is_owner
 
     @discord.ui.button(label="Open Preview", style=discord.ButtonStyle.link, emoji="🌐")
     async def open_preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         button.url = self.preview_url
 
-    @discord.ui.button(label="Download Project", style=discord.ButtonStyle.secondary, emoji="📦")
+    @discord.ui.button(label="Download", style=discord.ButtonStyle.secondary, emoji="📦")
     async def download_project(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         project = await site_store.get_project(self.project_id)
         if not project or project["owner_id"] != interaction.user.id:
@@ -68,9 +65,22 @@ class SiteView(discord.ui.View):
             await interaction.response.send_message("You can only view your own project logs.", ephemeral=True)
             return
         entries = project.get("edit_log", [])
-        lines = [f"`{entry['timestamp'][:16].replace('T', ' ')}` — {entry['description']}" for entry in entries[-15:]]
+        if not entries:
+            await interaction.response.send_message("No edits yet.", ephemeral=True)
+            return
+        # Build a nice edit log display
+        lines = []
+        for entry in entries[-20:]:
+            ts = entry["timestamp"][:16].replace("T", " ")
+            status_emoji = {"success": "✅", "failed": "❌", "debugging": "🔧", "blocked": "🚫", "planning": "🧠", "pending": "⏳"}.get(entry.get("build_status", ""), "•")
+            debug_info = f" [{entry['debug_status']}]" if entry.get("debug_status") else ""
+            files_info = f" ({', '.join(entry.get('files', [])[:3])})" if entry.get("files") else ""
+            lines.append(f"`{ts}` {status_emoji} {entry['description']}{debug_info}{files_info}")
+        text = "\n".join(lines)
+        if len(text) > 1900:
+            text = text[-1900:]
         await interaction.response.send_message(
-            embed=discord.Embed(title="📝 Edit Log", description="\n".join(lines) or "No edits yet.", color=COLOR_INFO),
+            content=f"📝 **Edit Log**\n```\n{text}\n```",
             ephemeral=True,
         )
 
@@ -92,35 +102,29 @@ class SiteCog(commands.Cog, name="AppEngineering"):
 
         # ── Check usage credits ────────────────────────────────────────────────
         if not is_owner:
-            allowed, remaining_check = await site_store.check_site_usage(user.id)
+            allowed, _ = await site_store.check_site_usage(user.id)
             if not allowed:
                 await ctx.send(embed=discord.Embed(
                     title="⚠️ App creation paused",
                     description=(
                         f"Your **{SITE_FREE_MONTHLY_LIMIT}** monthly app credits are used up.\n\n"
-                        f"🚫 All your sites are now **offline** until credits reset next month.\n\n"
+                        f"🚫 All your sites are **offline** until credits reset next month.\n\n"
                         f"Add your own API key with `/setkey` to continue building."
                     ),
                     color=COLOR_WARN,
                 ))
                 return
 
-        # ── Determine if this is a new project or an edit ─────────────────────
+        # ── Determine if edit or new ───────────────────────────────────────────
         is_edit = False
         target_project_id = project_id
         if project_id:
             project = await site_store.get_project(project_id)
             if not project:
-                await ctx.send(embed=discord.Embed(
-                    description=f"❌ Project `{project_id}` not found.",
-                    color=COLOR_ERR,
-                ))
+                await ctx.send(embed=discord.Embed(description=f"❌ Project `{project_id}` not found.", color=COLOR_ERR))
                 return
             if project["owner_id"] != user.id:
-                await ctx.send(embed=discord.Embed(
-                    description="❌ You can only edit your own projects.",
-                    color=COLOR_ERR,
-                ))
+                await ctx.send(embed=discord.Embed(description="❌ You can only edit your own projects.", color=COLOR_ERR))
                 return
             is_edit = True
         else:
@@ -129,44 +133,75 @@ class SiteCog(commands.Cog, name="AppEngineering"):
                 k in description.lower() for k in (
                     "make it", "add", "fix", "change", "update", "remove",
                     "dark mode", "mobile friendly", "blue", "navbar",
-                    "login", "animation", "button", "color", "font",
+                    "login", "animation", "button", "color", "font", "theme",
                 )
             ):
                 target_project_id = latest["id"]
                 is_edit = True
 
-        # ── Consume a credit (non-owners only) ────────────────────────────────
+        # ── Consume credit ─────────────────────────────────────────────────────
         if not is_owner:
             consumed, remaining = await site_store.consume_site_message(user.id)
             if not consumed:
                 await ctx.send(embed=discord.Embed(
                     title="⚠️ App creation paused",
-                    description=(
-                        "Your monthly app credits were used by another request.\n"
-                        "🚫 All your sites are now **offline** until credits reset.\n\n"
-                        "Add your own API key with `/setkey` to continue."
-                    ),
+                    description="Your monthly app credits were used by another request.\n🚫 All your sites are now **offline** until credits reset.\n\nAdd your own API key with `/setkey` to continue.",
                     color=COLOR_WARN,
                 ))
                 return
         else:
             remaining = None
 
-        # ── Progress message ──────────────────────────────────────────────────
-        progress = discord.Embed(
+        # ── Live progress message ───────────────────────────────────────────────
+        progress_embed = discord.Embed(
             title="✏️ Editing Project" if is_edit else "🏗️ App Engineering",
-            description="🧠 Planning...\n⚙️ Generating files...\n🧪 Building...\n🔧 Testing...\n📸 Capturing preview...",
+            description="🧠 Starting...",
             color=COLOR_INFO,
         )
-        progress.set_footer(text=f"Requested by {user.display_name}")
-        progress_msg = await ctx.send(embed=progress)
+        progress_embed.set_footer(text=f"Requested by {user.display_name}")
+        progress_msg = await ctx.send(embed=progress_embed)
 
-        # ── Run the pipeline ──────────────────────────────────────────────────
+        # ── Live progress callback ─────────────────────────────────────────────
+        current_thoughts: list[str] = []
+        edit_log_lines: list[str] = []
+
+        async def on_progress(key: str, msg: str) -> None:
+            try:
+                if key == "thinking":
+                    current_thoughts.append(msg.replace("🧠 ", ""))
+                    # Show last 3 thoughts
+                    visible = current_thoughts[-3:]
+                    thoughts_text = "\n".join(f"💭 {t}" for t in visible)
+                    desc = f"{msg}\n\n**AI Thinking:**\n{thoughts_text}"
+                elif key == "debugging":
+                    desc = f"{msg}\n\n**Edit Log:**\n```\n" + "\n".join(edit_log_lines[-4:]) + "\n```"
+                else:
+                    desc = msg
+                    if current_thoughts:
+                        desc += f"\n\n💭 _AI thought through {len(current_thoughts)} steps_"
+
+                # Update edit log
+                if key in ("building", "debugging", "success", "failed", "blocked", "screenshot", "done", "planning", "generating"):
+                    edit_log_lines.append(msg)
+                    if key not in ("thinking",):
+                        desc = f"{msg}\n\n**Edit Log:**\n```\n" + "\n".join(edit_log_lines[-5:]) + "\n```"
+
+                updated = discord.Embed(
+                    title="✏️ Editing Project" if is_edit else "🏗️ App Engineering",
+                    description=desc[:4000],
+                    color=COLOR_INFO if key not in ("failed", "blocked") else COLOR_ERR if key == "failed" else COLOR_WARN,
+                )
+                updated.set_footer(text=f"Requested by {user.display_name}")
+                await progress_msg.edit(embed=updated)
+            except Exception as exc:
+                log.debug("[site] Progress update failed: %s", exc)
+
+        # ── Run pipeline ──────────────────────────────────────────────────────
         try:
             if is_edit and target_project_id:
-                result = await site_engine.edit_project(target_project_id, description, user_gemini_key)
+                result = await site_engine.edit_project(target_project_id, description, user_gemini_key, on_progress)
             else:
-                result = await site_engine.generate_project(description, user.id, user_gemini_key)
+                result = await site_engine.generate_project(description, user.id, user_gemini_key, on_progress)
         except Exception as exc:
             log.error("[site] Pipeline error: %s", exc, exc_info=True)
             await progress_msg.edit(embed=discord.Embed(
@@ -184,7 +219,6 @@ class SiteCog(commands.Cog, name="AppEngineering"):
             ))
             return
 
-        # ── Handle blocked (scam/phishing/malware) ─────────────────────────────
         if result.get("build_status") == "blocked":
             await progress_msg.edit(embed=discord.Embed(
                 title="🚫 Request blocked",
@@ -201,12 +235,16 @@ class SiteCog(commands.Cog, name="AppEngineering"):
             ))
             return
 
-        # ── Success! Build the response ───────────────────────────────────────
+        # ── Success! Build final response ──────────────────────────────────────
         files = result["files"]
         pid = result["project_id"]
         project = await site_store.get_project(pid) if pid else None
         entries = project.get("edit_log", []) if project else []
         info = result.get("info", {})
+        thinking = result.get("thinking", [])
+
+        # Build edit log text
+        log_text = "\n".join(f"{e['timestamp'][11:16]} — {e['description']}" for e in entries[-8:])[:1000]
 
         embed = discord.Embed(
             title="✅ Site ready!",
@@ -217,11 +255,13 @@ class SiteCog(commands.Cog, name="AppEngineering"):
         if result.get("screenshot"):
             embed.set_image(url="attachment://preview.png")
 
-        # Edit log (last 6 entries)
-        log_text = "\n".join(f"{e['timestamp'][11:16]} — {e['description']}" for e in entries[-6:])[:1000]
+        # Show AI thinking
+        if thinking:
+            thinking_text = "\n".join(f"💭 {t}" for t in thinking[:5])
+            embed.add_field(name="🧠 AI Thought Process", value=thinking_text[:1000], inline=False)
+
         embed.add_field(name="📝 Edit Log", value=f"```\n{log_text}\n```", inline=False)
 
-        # Project info
         embed.add_field(
             name="⚠️ Project Info",
             value="\n".join((
@@ -240,8 +280,7 @@ class SiteCog(commands.Cog, name="AppEngineering"):
                 footer += " • ⚠️ Sites offline until reset"
         embed.set_footer(text=footer)
 
-        # View with buttons
-        view = SiteView(pid, files, result.get("preview_url"), user.id, is_owner)
+        view = SiteView(pid, files, result.get("preview_url"), user.id)
         for child in view.children:
             if isinstance(child, discord.ui.Button) and child.label == "Open Preview":
                 child.url = result.get("preview_url") or "https://botdi.app"
@@ -261,25 +300,25 @@ class SiteCog(commands.Cog, name="AppEngineering"):
             color=COLOR_OK,
         )
 
-    @commands.hybrid_command(name="setkey", description="Set your own Gemini API key for /site")
-    @discord.app_commands.describe(api_key="Your Gemini API key")
+    @commands.hybrid_command(name="setkey", description="Set your own Gemini API key for /site (uses your quota instead of Botdi's)")
+    @discord.app_commands.describe(api_key="Your Gemini API key (starts with AIza)")
     async def setkey_cmd(self, ctx: commands.Context, *, api_key: str) -> None:
         if ctx.guild is not None:
             await ctx.send(embed=discord.Embed(
-                description="❌ Please use `/setkey` in a DM to Botdi.",
+                description="❌ Please use `/setkey` in a DM to Botdi to keep your key private.",
                 color=COLOR_ERR,
             ), delete_after=10)
             return
         if not api_key.startswith("AIza"):
             await ctx.send(embed=discord.Embed(
-                description="❌ That doesn't look like a valid Gemini API key.",
+                description="❌ That doesn't look like a valid Gemini API key (should start with 'AIza').",
                 color=COLOR_ERR,
             ))
             return
         await site_store.set_user_gemini_key(ctx.author.id, api_key)
         await ctx.send(embed=discord.Embed(
             title="✅ API Key Saved",
-            description="Your key is stored securely and used only for your /site requests.",
+            description="Your Gemini key is stored securely and used only for your /site requests.",
             color=COLOR_OK,
         ))
 
@@ -294,7 +333,7 @@ class SiteCog(commands.Cog, name="AppEngineering"):
             color=COLOR_OK if removed else COLOR_INFO,
         ))
 
-    @commands.hybrid_command(name="myprojects", description="List your App Engineering projects")
+    @commands.hybrid_command(name="myprojects", description="List your App Engineering projects with status and credits")
     async def myprojects_cmd(self, ctx: commands.Context) -> None:
         projects = await site_store.get_user_projects(ctx.author.id)
         if not projects:
@@ -307,14 +346,17 @@ class SiteCog(commands.Cog, name="AppEngineering"):
         _, remaining = await site_store.check_site_usage(ctx.author.id) if not is_owner else (True, "∞")
         lines = []
         for p in projects[-10:]:
-            status_emoji = "✅" if p["build_status"] == "success" else "❌" if p["build_status"] == "failed" else "🚫" if p["build_status"] == "blocked" else "⏳"
-            lines.append(f"{status_emoji} `{p['id']}` — {p.get('prompt', 'Untitled')[:50]}")
+            status_emoji = {
+                "success": "✅", "failed": "❌", "blocked": "🚫",
+                "pending": "⏳", "planning": "🧠",
+            }.get(p["build_status"], "•")
+            lines.append(f"{status_emoji} `{p['id']}` — {p.get('prompt', 'Untitled')[:60]}")
         embed = discord.Embed(
             title="📋 Your Projects",
             description="\n".join(lines),
             color=COLOR_INFO,
         )
-        embed.set_footer(text=f"{'∞' if is_owner else f'{remaining}/{SITE_FREE_MONTHLY_LIMIT}'} credits {'(owner)' if is_owner else 'this month'}")
+        embed.set_footer(text=f"{'∞' if is_owner else f'{remaining}/{SITE_FREE_MONTHLY_LIMIT}'} credits {'(owner — unlimited)' if is_owner else 'this month'}")
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name="deleteproject", description="Delete one of your projects by ID")
@@ -322,22 +364,13 @@ class SiteCog(commands.Cog, name="AppEngineering"):
     async def deleteproject_cmd(self, ctx: commands.Context, project_id: str) -> None:
         project = await site_store.get_project(project_id)
         if not project:
-            await ctx.send(embed=discord.Embed(
-                description=f"❌ Project `{project_id}` not found.",
-                color=COLOR_ERR,
-            ))
+            await ctx.send(embed=discord.Embed(description=f"❌ Project `{project_id}` not found.", color=COLOR_ERR))
             return
         if project["owner_id"] != ctx.author.id:
-            await ctx.send(embed=discord.Embed(
-                description="❌ You can only delete your own projects.",
-                color=COLOR_ERR,
-            ))
+            await ctx.send(embed=discord.Embed(description="❌ You can only delete your own projects.", color=COLOR_ERR))
             return
         await site_store.delete_project(project_id)
-        await ctx.send(embed=discord.Embed(
-            description=f"🗑️ Project `{project_id}` deleted.",
-            color=COLOR_OK,
-        ))
+        await ctx.send(embed=discord.Embed(description=f"🗑️ Project `{project_id}` deleted.", color=COLOR_OK))
 
     @commands.hybrid_command(name="sitecredits", description="Check your remaining App Engineering credits")
     async def sitecredits_cmd(self, ctx: commands.Context) -> None:
@@ -345,7 +378,7 @@ class SiteCog(commands.Cog, name="AppEngineering"):
         if is_owner:
             await ctx.send(embed=discord.Embed(
                 title="🆓 App Engineering Credits",
-                description="You are the bot owner — **unlimited** credits.",
+                description="You are the bot owner — **unlimited** credits. Your sites never go offline.",
                 color=COLOR_OK,
             ))
             return
