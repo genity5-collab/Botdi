@@ -1,11 +1,12 @@
-"""Botdi AI assistant for DMs and guild mentions.
+"""Vyrion AI assistant for DMs and guild mentions.
 
 Uses owner's API keys — never user keys.
 Provider chain (all free/cheap): Gemini Flash → Groq → OpenRouter free → Cerebras
 Replies in plain text (no embeds — embeds can truncate content).
 Keeps responses short and conversational.
 
-If Gemini key is cooked (expired/dead), falls back to Groq/OpenRouter/Cerebras automatically.
+IMPORTANT: When a user has an open support ticket, the AI does NOT respond to their DMs.
+Messages go to staff via the support cog instead.
 """
 from __future__ import annotations
 
@@ -37,12 +38,11 @@ from config import (
     OPENROUTER_MODEL,
     OPENROUTER_URL,
 )
-from data_store import add_memory, check_dm_quota, clear_memory, get_memory, save_memory, use_dm_quota
+from data_store import add_memory, check_dm_quota, clear_memory, get_memory, save_memory, use_dm_quota, get_user_open_ticket
 from utils import check_pii_tos, check_profanity_at_bot, clean_ai_output, log_action
 
 log = logging.getLogger(__name__)
 
-# Only initialize Gemini if key exists — don't crash if key is missing/expired
 _gemini = None
 if GEMINI_API_KEY:
     try:
@@ -54,7 +54,7 @@ if GEMINI_API_KEY:
 _owners: set[int] = set()
 
 _SYSTEM = """\
-You are Botdi, a sharp, friendly Discord AI assistant. You're real, not robotic.
+You are Vyrion, a sharp, friendly Discord AI assistant. You're real, not robotic.
 
 Personality:
 - Be warm, casual, and genuinely helpful. Talk like a friend, not a corporate bot.
@@ -64,11 +64,12 @@ Personality:
 - If someone asks a quick question, give a quick answer.
 - Have opinions when it matters. Don't be a yes-man.
 - Remember context from the conversation — reference things the user said earlier.
+- Your name is Vyrion. If someone asks your name, tell them.
 
 Safety:
 - Never provide instructions for harm, illegal activity, self-harm, violence, hate, scams, or explicit content.
 - Never reveal personal information. No medical/legal/financial advice.
-- Do not claim to be human or another AI.
+- Do not claim to be human or another AI. You are Vyrion.
 """
 
 _BLOCKED = (
@@ -76,7 +77,6 @@ _BLOCKED = (
     "how to kill", "suicide method", "ignore your rules", "jailbreak",
 )
 
-# Extra free OpenRouter fallback models for AI chat
 _FREE_OPENROUTER_MODELS = [
     "meta-llama/llama-3.2-3b-instruct:free",
     "meta-llama/llama-3.1-8b-instruct:free",
@@ -107,7 +107,6 @@ async def _compat(url: str, key: str, model: str, messages: list[dict[str, str]]
 
 
 async def _try_openrouter_free(messages: list[dict]) -> str | None:
-    """Try multiple free OpenRouter models as fallback."""
     if not OPENROUTER_API_KEY:
         return None
     for model in _FREE_OPENROUTER_MODELS:
@@ -118,7 +117,6 @@ async def _try_openrouter_free(messages: list[dict]) -> str | None:
 
 
 async def _generate(history: list[dict[str, str]], query: str) -> str | None:
-    # Try Gemini Flash first (free tier — only if key is working)
     if _gemini is not None:
         context = "\n".join(f"{item['role']}: {item['content']}" for item in history[-12:])
         prompt = f"{_SYSTEM}\n\nConversation:\n{context}\n\nUser: {query}"
@@ -132,22 +130,18 @@ async def _generate(history: list[dict[str, str]], query: str) -> str | None:
                     return clean_ai_output(response.text.strip(), max_len=600)
             except Exception as exc:
                 log.warning("Gemini provider failed (key may be expired): %s", exc)
-                break  # If Gemini fails, don't retry other Gemini models — move to fallbacks
+                break
 
-    # Fallback chain: Groq → OpenRouter free models → Cerebras
     messages = [{"role": "system", "content": _SYSTEM}, *history[-12:], {"role": "user", "content": query}]
 
-    # Groq (fast, free)
     result = await _compat(GROQ_URL, GROQ_API_KEY, GROQ_MODEL, messages)
     if result:
         return result
 
-    # OpenRouter free models (try multiple)
     result = await _try_openrouter_free(messages)
     if result:
         return result
 
-    # Cerebras (fast, free)
     result = await _compat(CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL, messages)
     if result:
         return result
@@ -173,14 +167,22 @@ class AICog(commands.Cog, name="AI"):
             return
         is_dm = isinstance(message.channel, discord.DMChannel)
         mentioned = self.bot.user is not None and self.bot.user in message.mentions
-        if not is_dm and not mentioned and "botdi" not in message.content.lower():
+
+        # ── Don't respond in DMs if user has an open ticket ────────────────────
+        # The support cog handles their messages instead.
+        if is_dm:
+            existing_ticket = await get_user_open_ticket(message.author.id)
+            if existing_ticket is not None:
+                return  # Let support cog handle it
+
+        if not is_dm and not mentioned and "vyrion" not in message.content.lower() and "botdi" not in message.content.lower():
             return
         user = message.author
         owner = user.id in _owners
         query = message.clean_content
         if self.bot.user:
             query = query.replace(f"@{self.bot.user.display_name}", "")
-        query = re.sub(r"(?i)^botdi[,:\s]+", "", query).strip()
+        query = re.sub(r"(?i)^(?:vyrion|botdi)[,:\s]+", "", query).strip()
         if not query:
             await message.reply("Hey! What's up?", delete_after=8)
             return
@@ -191,7 +193,7 @@ class AICog(commands.Cog, name="AI"):
                 return
         if not owner and (any(pattern in query.lower() for pattern in _BLOCKED) or check_profanity_at_bot(query)):
             await message.reply("I can't help with that. Keep it safe and respectful.", delete_after=12)
-            await log_action(self.bot, "Botdi request blocked", f"**User:** {user.mention}\n**Query:** {query[:300]}", color=COLOR_WARN)
+            await log_action(self.bot, "Vyrion request blocked", f"**User:** {user.mention}\n**Query:** {query[:300]}", color=COLOR_WARN)
             return
         if not owner:
             violated, reason = check_pii_tos(query)
@@ -211,7 +213,6 @@ class AICog(commands.Cog, name="AI"):
         add_memory(user.id, "user", query)
         add_memory(user.id, "assistant", reply)
         await save_memory()
-        # Plain text reply (no embeds)
         if remaining is not None and remaining <= 3:
             reply += f"\n\n*({remaining}/{DM_DAILY_LIMIT} DM messages left today)*"
         await message.reply(reply)

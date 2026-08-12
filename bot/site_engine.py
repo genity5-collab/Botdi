@@ -4,6 +4,11 @@ dependency support, provider fallback, build, debug, screenshot, ZIP, live edit 
 
 Pipeline: Prompt → Think (visible) → Tools (visible) → Generate → Build → Test → Debug → Screenshot → Preview → Deliver
 
+Provider chains:
+  - Generation (better UI): Groq gpt-oss-20b → Fireworks → OpenRouter free
+  - Debugging (fixing errors): OpenRouter gpt-oss-20b:free → Groq → Fireworks
+  - Thinking: Same as generation (Groq for better planning)
+
 Security:
   - API keys are server-side env vars only (owner's keys, not user keys)
   - User Gemini key is optional and used only for that user's requests
@@ -27,7 +32,9 @@ from typing import Any, Callable, Awaitable
 import aiohttp
 
 from config import (
-    SITE_PROVIDER_CHAIN,
+    SITE_GENERATE_CHAIN,
+    SITE_DEBUG_CHAIN,
+    SITE_THINK_CHAIN,
     SITE_MAX_DEBUG_RETRIES,
     SITE_PREVIEW_BASE_URL,
     SITE_FREE_MONTHLY_LIMIT,
@@ -44,7 +51,7 @@ log = logging.getLogger(__name__)
 # ── System prompts ────────────────────────────────────────────────────────────
 
 _THINK_SYSTEM = """\
-You are Botdi's App Engineering Thinker. Before generating a website, you think through the plan step by step.
+You are Vyrion's App Engineering Thinker. Before generating a website, you think through the plan step by step.
 
 Output ONLY a JSON object:
 {
@@ -76,7 +83,7 @@ Output ONLY the JSON. No markdown, no explanation.
 """
 
 _ENGINEER_SYSTEM = """\
-You are Botdi App Engineering, an AI that generates complete, polished, working website projects.
+You are Vyrion App Engineering, an AI that generates complete, polished, working website projects.
 
 You output ONLY a single JSON object — no markdown, no explanation, no code fences.
 The JSON must have this exact structure:
@@ -122,7 +129,7 @@ If asked for any of the above, output: {"files": {}, "summary": "Request blocked
 """
 
 _EDIT_SYSTEM = """\
-You are Botdi App Engineering, editing an existing website project.
+You are Vyrion App Engineering, editing an existing website project.
 
 You will receive the current project files and an edit request.
 Output ONLY a single JSON object with the same structure as the generate step.
@@ -139,7 +146,7 @@ Rules:
 """
 
 _DEBUG_SYSTEM = """\
-You are Botdi App Engineering, fixing a build/runtime error in a website project.
+You are Vyrion App Engineering, fixing a build/runtime error in a website project.
 
 You will receive the current files and an error message.
 Fix the error and output ONLY a JSON object with the same structure (all files).
@@ -154,7 +161,6 @@ _BLOCKED_RE = [re.compile(p) for p in SITE_BLOCKED_PATTERNS]
 
 
 def check_prompt_safety(prompt: str) -> tuple[bool, str]:
-    """Check if a prompt asks for something malicious. Returns (safe, reason)."""
     lower = prompt.lower()
     for kw in SITE_BLOCKED_KEYWORDS:
         if kw in lower:
@@ -165,7 +171,7 @@ def check_prompt_safety(prompt: str) -> tuple[bool, str]:
     return True, ""
 
 
-# ── Provider chain (owner's keys + free fallbacks) ────────────────────────────
+# ── Provider calls ───────────────────────────────────────────────────────────
 
 async def _call_provider(
     provider: dict[str, str],
@@ -179,9 +185,9 @@ async def _call_provider(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    if provider["name"] == "openrouter" or "openrouter" in provider.get("url", ""):
-        headers["HTTP-Referer"] = "https://botdi.app"
-        headers["X-Title"] = "Botdi App Engineering"
+    if "openrouter" in provider.get("url", ""):
+        headers["HTTP-Referer"] = "https://vyrion.app"
+        headers["X-Title"] = "Vyrion App Engineering"
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(
@@ -200,9 +206,12 @@ async def _call_provider(
                     log.warning("[site:%s] HTTP %s: %s", provider["name"], resp.status, body[:200])
                     return None
                 data = await resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+                content = data["choices"][0]["message"]["content"]
+                if content and content.strip():
+                    return content.strip()
+                return None
     except asyncio.TimeoutError:
-        log.warning("[site:%s] timed out", provider["name"])
+        log.warning("[site:%s] timed out after %ss", provider["name"], timeout)
     except Exception as exc:
         log.warning("[site:%s] %s", provider["name"], exc)
     return None
@@ -221,7 +230,7 @@ async def _call_openrouter_free_fallback(messages: list[dict]) -> str | None:
         }
         result = await _call_provider(provider, messages, timeout=60.0)
         if result:
-            log.info("[site] Fallback model worked: %s", model)
+            log.info("[site] Free fallback model worked: %s", model)
             return result
     return None
 
@@ -241,9 +250,13 @@ async def _call_user_gemini(api_key: str, messages: list[dict]) -> str | None:
         return None
 
 
-async def _generate_with_fallback(
-    system: str, user_prompt: str, user_gemini_key: str | None = None
+async def _generate_with_chain(
+    system: str,
+    user_prompt: str,
+    chain: list[dict],
+    user_gemini_key: str | None = None,
 ) -> str | None:
+    """Try a specific provider chain, then free OpenRouter fallbacks."""
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user_prompt},
@@ -253,16 +266,31 @@ async def _generate_with_fallback(
         result = await _call_user_gemini(user_gemini_key, messages)
         if result:
             return result
-    # Owner's API keys: Groq → OpenRouter → Fireworks
-    for provider in SITE_PROVIDER_CHAIN:
+    # Main chain
+    for provider in chain:
         result = await _call_provider(provider, messages)
         if result:
             return result
-    # Extra free OpenRouter fallback models
+    # Free OpenRouter fallbacks
     result = await _call_openrouter_free_fallback(messages)
     if result:
         return result
     return None
+
+
+async def _generate_files(system: str, prompt: str, user_gemini_key: str | None = None) -> str | None:
+    """Generate files using the generation chain (Groq first for better UI)."""
+    return await _generate_with_chain(system, prompt, SITE_GENERATE_CHAIN, user_gemini_key)
+
+
+async def _think_ai(prompt: str, user_gemini_key: str | None = None) -> str | None:
+    """Think using the think chain (Groq for better planning)."""
+    return await _generate_with_chain(_THINK_SYSTEM, prompt, SITE_THINK_CHAIN, user_gemini_key)
+
+
+async def _debug_ai(prompt: str, user_gemini_key: str | None = None) -> str | None:
+    """Debug using the debug chain (OpenRouter free first)."""
+    return await _generate_with_chain(_DEBUG_SYSTEM, prompt, SITE_DEBUG_CHAIN, user_gemini_key)
 
 
 def _extract_json(text: str) -> dict | None:
@@ -349,7 +377,7 @@ def _create_zip(files: dict[str, str]) -> io.BytesIO:
             zf.writestr(fname, content)
         zf.writestr(
             "README.txt",
-            "Generated by Botdi App Engineering\n"
+            "Generated by Vyrion App Engineering\n"
             "This project contains HTML, CSS, and JavaScript files.\n"
             "Open index.html in your browser to view the site.\n",
         )
@@ -393,9 +421,8 @@ def _analyze_project(files: dict[str, str], dependencies: list[str] | None = Non
 async def _think(
     prompt: str, user_gemini_key: str | None = None
 ) -> dict | None:
-    """Generate a visible thinking/plan before generating files."""
     think_prompt = f"User wants: {prompt}\n\nThink through how to build this website. Include tools you'd use and dependencies needed."
-    raw = await _generate_with_fallback(_THINK_SYSTEM, think_prompt, user_gemini_key)
+    raw = await _think_ai(think_prompt, user_gemini_key)
     if not raw:
         return None
     parsed = _extract_json(raw)
@@ -412,7 +439,6 @@ async def generate_project(
     user_gemini_key: str | None = None,
     on_progress: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> dict[str, Any] | None:
-    """Generate a new website project. on_progress(status_key, message) is called at each step."""
 
     async def _progress(key: str, msg: str) -> None:
         if on_progress:
@@ -437,7 +463,7 @@ async def generate_project(
     project = await site_store.create_project(user_id, prompt)
     pid = project["id"]
 
-    # ── Thinking phase (visible to user) ──────────────────────────────────────
+    # ── Thinking phase ────────────────────────────────────────────────────────
     await _progress("thinking", "🧠 Analyzing your request...")
     thinking = await _think(prompt, user_gemini_key)
     thoughts: list[str] = []
@@ -448,31 +474,24 @@ async def generate_project(
         tools = thinking.get("tools", [])
         dependencies = thinking.get("dependencies", [])
         plan = thinking.get("plan", "")
-
-        # Show each thought with a small delay
         for i, thought in enumerate(thoughts):
             await _progress("thinking", f"🧠 {thought}")
             await asyncio.sleep(0.4)
-
-        # Show tools being "run"
         if tools:
             await _progress("tools", f"🔧 Running tools ({len(tools)})...")
             for tool in tools:
                 await _progress("tools", f"🔧 {tool}")
                 await asyncio.sleep(0.3)
-
-        # Show dependencies being added
         if dependencies:
             await _progress("deps", f"📦 Adding dependencies: {', '.join(dependencies)}")
             await site_store.add_edit_log_entry(pid, f"Dependencies: {', '.join(dependencies)}", [], "planning")
         else:
             await _progress("deps", "📦 No external dependencies needed")
-
         if plan:
             await _progress("planning", f"📋 Plan: {plan[:200]}")
         await site_store.add_edit_log_entry(pid, f"AI thought through approach ({len(thoughts)} steps, {len(tools)} tools)", [], "planning")
 
-    # ── Generate files ─────────────────────────────────────────────────────────
+    # ── Generate files (Groq chain for better UI) ──────────────────────────────
     await _progress("generating", "⚙️ Writing HTML/CSS/JS files...")
     ai_prompt = f"Build a website with this description:\n\n{prompt}\n\n"
     if thinking:
@@ -481,20 +500,19 @@ async def generate_project(
         if dependencies:
             ai_prompt += f"Use these CDN dependencies: {', '.join(dependencies)}\n\n"
     ai_prompt += "Generate all files now."
-    raw = await _generate_with_fallback(_ENGINEER_SYSTEM, ai_prompt, user_gemini_key)
+    raw = await _generate_files(_ENGINEER_SYSTEM, ai_prompt, user_gemini_key)
     if not raw:
-        await _progress("failed", "❌ All AI providers unavailable (tried Groq, OpenRouter free models, Fireworks)")
+        await _progress("failed", "❌ All AI providers unavailable. Tried: Groq, Fireworks, OpenRouter free (5 models). Check API keys.")
         await site_store.update_project(pid, {"build_status": "failed"})
         await site_store.add_edit_log_entry(pid, "Generation failed — no AI provider available", [], "failed")
         return None
     parsed = _extract_json(raw)
     if not parsed or "files" not in parsed:
-        await _progress("failed", "❌ Invalid AI response — couldn't parse files")
+        await _progress("failed", "❌ AI returned invalid response — couldn't parse files. Try again or rephrase your request.")
         await site_store.update_project(pid, {"build_status": "failed"})
         await site_store.add_edit_log_entry(pid, "Generation failed — invalid AI response", [], "failed")
         return None
     files = _strip_secrets(parsed["files"])
-    # Update dependencies from actual generated files
     actual_deps = parsed.get("dependencies", [])
     if actual_deps:
         dependencies = actual_deps
@@ -510,7 +528,7 @@ async def generate_project(
             "info": {"contains": "N/A", "dependencies": 0, "cdn_libraries": [], "external_requests": None, "api_usage": "None", "permissions": "Blocked"},
         }
 
-    # ── Validate & debug ─────────────────────────────────────────────────────
+    # ── Validate & debug (OpenRouter free chain for debugging) ────────────────
     await _progress("building", "🧪 Validating HTML structure...")
     ok, msg = _validate_project(files)
     if not ok:
@@ -560,7 +578,6 @@ async def edit_project(
     user_gemini_key: str | None = None,
     on_progress: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> dict[str, Any] | None:
-    """Edit an existing project."""
 
     async def _progress(key: str, msg: str) -> None:
         if on_progress:
@@ -573,10 +590,8 @@ async def edit_project(
     if not project:
         return None
 
-    # ── Safety check ──────────────────────────────────────────────────────────
     safe, reason = check_prompt_safety(edit_prompt)
     if not safe:
-        log.warning("[site:%s] Blocked edit: %s — %s", project_id, reason, edit_prompt[:100])
         return {
             "project_id": project_id, "files": project["files"],
             "build_status": "blocked", "error": f"Edit blocked: {reason}",
@@ -585,7 +600,6 @@ async def edit_project(
             "info": _analyze_project(project["files"]),
         }
 
-    # ── Thinking phase ────────────────────────────────────────────────────────
     await _progress("thinking", "🧠 Analyzing the edit request...")
     thinking = await _think(edit_prompt, user_gemini_key)
     thoughts: list[str] = []
@@ -603,7 +617,6 @@ async def edit_project(
                 await _progress("tools", f"🔧 {tool}")
                 await asyncio.sleep(0.3)
 
-    # ── Generate edit ─────────────────────────────────────────────────────────
     await _progress("generating", "⚙️ Generating edit...")
     current_files = project["files"]
     ai_prompt = (
@@ -611,13 +624,13 @@ async def edit_project(
         f"Edit request: {edit_prompt}\n\n"
         "Return ALL files with the requested changes."
     )
-    raw = await _generate_with_fallback(_EDIT_SYSTEM, ai_prompt, user_gemini_key)
+    raw = await _generate_files(_EDIT_SYSTEM, ai_prompt, user_gemini_key)
     if not raw:
-        await _progress("failed", "❌ All AI providers unavailable")
+        await _progress("failed", "❌ All AI providers unavailable. Check API keys.")
         return None
     parsed = _extract_json(raw)
     if not parsed or "files" not in parsed:
-        await _progress("failed", "❌ Invalid AI response")
+        await _progress("failed", "❌ Invalid AI response — try rephrasing.")
         return None
     files = _strip_secrets(parsed["files"])
     if not files:
@@ -630,7 +643,6 @@ async def edit_project(
             "info": _analyze_project(project["files"]),
         }
 
-    # ── Validate & debug ─────────────────────────────────────────────────────
     await _progress("building", "🧪 Validating...")
     ok, msg = _validate_project(files)
     if not ok:
@@ -642,7 +654,6 @@ async def edit_project(
             await site_store.add_edit_log_entry(project_id, f"Edit failed: {debug_msg}", list(files.keys()), "failed", "failed")
             return {"project_id": project_id, "files": files, "build_status": "failed", "error": debug_msg, "thinking": thoughts, "tools": tools}
 
-    # ── Save & screenshot ─────────────────────────────────────────────────────
     await _progress("success", "✅ Edit applied!")
     await site_store.set_project_files(project_id, files)
     await site_store.update_project(project_id, {"build_status": "success", "preview_url": _preview_url(project_id)})
@@ -691,7 +702,8 @@ async def _auto_debug(
             f"Current files:\n{json.dumps(files, indent=2)}\n\n"
             f"Error: {error}\n\nFix the error and return all files."
         )
-        raw = await _generate_with_fallback(_DEBUG_SYSTEM, debug_prompt, user_gemini_key)
+        # Use debug chain (OpenRouter free first)
+        raw = await _debug_ai(debug_prompt, user_gemini_key)
         if not raw:
             break
         parsed = _extract_json(raw)

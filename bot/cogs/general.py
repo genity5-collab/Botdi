@@ -98,12 +98,12 @@ class General(commands.Cog, name="General"):
     @commands.hybrid_command(name="help", description="Show all available commands")
     async def help_cmd(self, ctx: commands.Context) -> None:
         embed = discord.Embed(
-            title="📖 Botdi Commands",
+            title="📖 Vyrion Commands",
             description="All commands work as **slash commands** (type `/`) or with `!` prefix.",
             color=BOT_COLOR,
         )
         embed.add_field(name="🤖 AI", value=(
-            "`@Botdi` — Ask anything (guild)\n"
+            "`@Vyrion` — Ask anything (guild)\n"
             "DM me directly — private chat\n"
             "Say `forget me` in DMs to clear history"
         ), inline=False)
@@ -117,13 +117,19 @@ class General(commands.Cog, name="General"):
             "`/removekey` — Remove your key (DM only)"
         ), inline=False)
         embed.add_field(name="⚠️ Moderation", value=(
-            "`/strike` `/strikes` `/mute` `/unmute`\n"
-            "`/warn` `/kick` `/ban` `/purge`\n"
-            "`/slowmode` `/lock` `/unlock`"
+            "`/strike` — 1=10h timeout, 2=2d timeout, 3=ban\n"
+            "`/strikes` `/resetstrikes` — View/reset strikes\n"
+            "`/kick` `/ban` `/softban` `/cleanban`\n"
+            "`/mute` `/unmute` `/warn` `/purge` `/nuke`\n"
+            "`/slowmode` `/lock` `/unlock`\n"
+            "`/roleinfo` `/roleadd` `/roletake`\n"
+            "`/timeoutinfo` — Check timeout expiry"
         ), inline=False)
         embed.add_field(name="🎫 Support", value=(
             "`/ticket` — Open a ticket\n"
-            "`/reply` `/close` — Staff commands"
+            "`/reply` `/close` `/decline` — Staff commands\n"
+            "`/tickets` — List open tickets (staff)\n"
+            f"⏰ Auto-close after 12h of inactivity"
         ), inline=False)
         embed.add_field(name="🎮 Fun", value=(
             "`/roll` `/flip` `/8ball` `/poll`\n"
@@ -133,7 +139,7 @@ class General(commands.Cog, name="General"):
             "`/ping` `/uptime` `/userinfo`\n"
             "`/serverinfo` `/help`"
         ), inline=False)
-        embed.set_footer(text="Botdi • 5 free /site credits/month • Owner has unlimited")
+        embed.set_footer(text="Vyrion • 5 free /site credits/month • Owner has unlimited")
         await ctx.send(embed=embed)
 
 

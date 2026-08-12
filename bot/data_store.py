@@ -76,7 +76,7 @@ async def create_ticket(user_id: int, category: str) -> str:
         tid = _gen_ticket_id()
         while tid in _tickets:
             tid = _gen_ticket_id()
-        _tickets[tid] = {"user_id": user_id, "category": category, "status": "open"}
+        _tickets[tid] = {"user_id": user_id, "category": category, "status": "open", "last_activity": datetime.datetime.now(datetime.timezone.utc).isoformat()}
         _save(TICKETS_FILE, _tickets)
         return tid
 
@@ -90,6 +90,7 @@ async def close_ticket(ticket_id: str) -> bool:
         if tid not in _tickets:
             return False
         _tickets[tid]["status"] = "closed"
+        _tickets[tid]["last_activity"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         _save(TICKETS_FILE, _tickets)
         return True
 

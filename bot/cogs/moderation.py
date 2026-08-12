@@ -1,5 +1,6 @@
 """
 Moderation Cog — /strike, /kick, /ban, /strikes, /mute, /unmute, /warn, /purge, /slowmode, /lock, /unlock
+                  /nuke, /roleinfo, /roleadd, /roletake, /cleanban, /softban, /timeoutinfo
 
 Strike escalation:
   1 strike = DM warning + 10 hour timeout
@@ -57,7 +58,6 @@ def _find_blacklisted(text: str) -> str | None:
 
 
 def _strike_action_text(strike_num: int) -> str:
-    """Human-readable description of what happens at each strike level."""
     if strike_num >= STRIKES_FOR_BAN:
         return f"Ban (reached {STRIKES_FOR_BAN} strikes)"
     elif strike_num == 2:
@@ -68,9 +68,8 @@ def _strike_action_text(strike_num: int) -> str:
 
 
 def _strike_timeout_seconds(strike_num: int) -> int:
-    """Get timeout duration for a given strike number."""
     if strike_num >= STRIKES_FOR_BAN:
-        return 0  # Ban, no timeout
+        return 0
     elif strike_num == 2:
         return STRIKE_2_TIMEOUT_SECONDS
     else:
@@ -78,17 +77,16 @@ def _strike_timeout_seconds(strike_num: int) -> int:
 
 
 def _strike_dm_embed(strike_num: int, reason: str) -> discord.Embed:
-    """Build the DM warning embed for a strike."""
     if strike_num >= STRIKES_FOR_BAN:
         return build_appeal_embed(reason)
 
     if strike_num == 2:
         timeout_text = "2 days"
-        next_text = f"One more strike and you will be **banned**."
+        next_text = "One more strike and you will be **banned**."
         color = COLOR_ERR
     else:
         timeout_text = "10 hours"
-        next_text = f"Next strike: 2 day timeout + warning. Strike 3 = ban."
+        next_text = "Next strike: 2 day timeout + warning. Strike 3 = ban."
         color = COLOR_WARN
 
     embed = discord.Embed(
@@ -97,13 +95,12 @@ def _strike_dm_embed(strike_num: int, reason: str) -> discord.Embed:
             f"**Reason:** {reason}\n"
             f"**Strike count:** {strike_num}/{STRIKES_FOR_BAN}\n\n"
             f"**Action taken:** {timeout_text} timeout\n\n"
-            f"{next_text}\n\n"
-            f"To appeal, use: [Appeal Form]({build_appeal_embed(reason).url if hasattr(build_appeal_embed(reason), 'url') else ''})"
+            f"{next_text}"
         ),
         color=color,
         timestamp=discord.utils.utcnow(),
     )
-    embed.set_footer(text="Botdi Moderation • Please review the server rules")
+    embed.set_footer(text="Vyrion Moderation • Please review the server rules")
     return embed
 
 
@@ -130,7 +127,6 @@ class Moderation(commands.Cog, name="Moderation"):
         action_taken = _strike_action_text(total)
 
         if total >= STRIKES_FOR_BAN:
-            # ── Strike 3 = ban ──────────────────────────────────────────────────
             await reset_strikes(target.id)
             try:
                 if member:
@@ -141,7 +137,6 @@ class Moderation(commands.Cog, name="Moderation"):
             except discord.Forbidden:
                 action_taken = f"Strike {total} — ban failed (missing permissions)"
         elif member:
-            # ── Strike 1 or 2 = timeout + DM warning ────────────────────────────
             timeout_secs = _strike_timeout_seconds(total)
             until = discord.utils.utcnow() + datetime.timedelta(seconds=timeout_secs)
             try:
@@ -153,7 +148,6 @@ class Moderation(commands.Cog, name="Moderation"):
             except discord.Forbidden:
                 action_taken = f"Strike {total} issued (timeout failed — missing permissions)"
 
-        # ── DM the user about the strike ───────────────────────────────────────
         try:
             dm = await target.create_dm()
             embed = _strike_dm_embed(total, reason)
@@ -199,7 +193,7 @@ class Moderation(commands.Cog, name="Moderation"):
                             "**Action:** 1-hour timeout\nPlease review the server rules.",
                 color=COLOR_ERR, timestamp=discord.utils.utcnow(),
             )
-            dm_embed.set_footer(text="Botdi Auto-Mod • Repeated violations lead to strikes")
+            dm_embed.set_footer(text="Vyrion Auto-Mod • Repeated violations lead to strikes")
             await member.send(embed=dm_embed)
         except discord.HTTPException:
             pass
@@ -222,14 +216,16 @@ class Moderation(commands.Cog, name="Moderation"):
         except discord.NotFound:
             await ctx.send("❌ User not found.", delete_after=10)
             return
+        # Check if they'll be banned
+        current = await get_strikes(target.id)
+        will_ban = current + 1 >= STRIKES_FOR_BAN
         await self.apply_strike(ctx.guild, target, reason, ctx.author)
-        total = await get_strikes(target.id) if total < STRIKES_FOR_BAN else 0
-        # Note: if banned, strikes are reset, so total shows 0 after ban
-        if total == 0 and "Banned" in _strike_action_text(3):
-            await ctx.send(f"🔨 {target.mention} has been **banned** (3 strikes).", delete_after=15)
+        total = await get_strikes(target.id)
+        if will_ban:
+            await ctx.send(f"🔨 {target.mention} has been **banned** (reached {STRIKES_FOR_BAN} strikes).", delete_after=15)
         else:
             timeout_text = "10 hour" if total == 1 else "2 day"
-            await ctx.send(f"⚠️ Strike {total} issued to {target.mention}. **{timeout_text} timeout** applied. They now have **{total}/{STRIKES_FOR_BAN}** strikes.", delete_after=15)
+            await ctx.send(f"⚠️ Strike {total} issued to {target.mention}. **{timeout_text} timeout** + DM warning. They now have **{total}/{STRIKES_FOR_BAN}** strikes.", delete_after=15)
 
     @commands.hybrid_command(name="kick", description="Kick a member from the server")
     @commands.has_permissions(kick_members=True)
@@ -258,11 +254,14 @@ class Moderation(commands.Cog, name="Moderation"):
 
     @commands.hybrid_command(name="ban", description="Ban a user from the server")
     @commands.has_permissions(ban_members=True)
-    @discord.app_commands.describe(user="User ID or @mention", reason="Reason for the ban")
-    async def ban_cmd(self, ctx: commands.Context, user: str, *, reason: str = "No reason provided") -> None:
+    @discord.app_commands.describe(user="User ID or @mention", reason="Reason for the ban", delete_days="Days of messages to delete (0-7, default 0)")
+    async def ban_cmd(self, ctx: commands.Context, user: str, *, reason: str = "No reason provided", delete_days: int = 0) -> None:
         uid = parse_user_id(user)
         if uid is None:
             await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        if delete_days < 0 or delete_days > 7:
+            await ctx.send("❌ Delete days must be 0–7.", delete_after=10)
             return
         try:
             target = await self.bot.fetch_user(uid)
@@ -274,13 +273,74 @@ class Moderation(commands.Cog, name="Moderation"):
         except discord.HTTPException:
             pass
         try:
-            await ctx.guild.ban(target, reason=f"{ctx.author}: {reason}")
+            await ctx.guild.ban(target, reason=f"{ctx.author}: {reason}", delete_message_days=delete_days)
         except discord.Forbidden:
             await ctx.send("❌ Missing permissions to ban this user.", delete_after=10)
             return
         await log_action(self.bot, "🔨 Member Banned",
-                         f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}")
+                         f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}\n**Deleted msgs:** {delete_days}d")
         await ctx.send(f"✅ **{target}** has been banned.", delete_after=15)
+
+    @commands.hybrid_command(name="softban", description="Ban then immediately unban to kick + delete messages")
+    @commands.has_permissions(ban_members=True)
+    @discord.app_commands.describe(user="User ID or @mention", reason="Reason for the softban")
+    async def softban_cmd(self, ctx: commands.Context, user: str, *, reason: str = "No reason provided") -> None:
+        """Ban and immediately unban — effectively a kick that deletes recent messages."""
+        uid = parse_user_id(user)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        try:
+            target = await self.bot.fetch_user(uid)
+        except discord.NotFound:
+            await ctx.send("❌ User not found.", delete_after=10)
+            return
+        try:
+            await ctx.guild.ban(target, reason=f"Softban by {ctx.author}: {reason}", delete_message_days=7)
+            await ctx.guild.unban(target, reason=f"Softban unban")
+        except discord.Forbidden:
+            await ctx.send("❌ Missing permissions.", delete_after=10)
+            return
+        except discord.HTTPException:
+            await ctx.send("❌ Softban failed.", delete_after=10)
+            return
+        await log_action(self.bot, "🔨 Member Softbanned",
+                         f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}")
+        await ctx.send(f"✅ **{target}** has been softbanned (kicked + messages deleted).", delete_after=15)
+
+    @commands.hybrid_command(name="cleanban", description="Ban a user and delete all their messages from the last 24h")
+    @commands.has_permissions(ban_members=True, manage_messages=True)
+    @discord.app_commands.describe(user="User ID or @mention", reason="Reason for the ban")
+    async def cleanban_cmd(self, ctx: commands.Context, user: str, *, reason: str = "No reason provided") -> None:
+        """Ban + purge all their messages from the last 24h across the guild."""
+        uid = parse_user_id(user)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        try:
+            target = await self.bot.fetch_user(uid)
+        except discord.NotFound:
+            await ctx.send("❌ User not found.", delete_after=10)
+            return
+        # Delete messages from the last 24h
+        after = discord.utils.utcnow() - datetime.timedelta(hours=24)
+        deleted_count = 0
+        for channel in ctx.guild.text_channels:
+            try:
+                msgs = [m async for m in channel.history(limit=100, after=after) if m.author.id == uid]
+                if msgs:
+                    await channel.delete_messages(msgs[:100])
+                    deleted_count += len(msgs[:100])
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+        try:
+            await ctx.guild.ban(target, reason=f"{ctx.author}: {reason}", delete_message_days=1)
+        except discord.Forbidden:
+            await ctx.send("❌ Missing permissions to ban.", delete_after=10)
+            return
+        await log_action(self.bot, "🔨 Clean Ban",
+                         f"**User:** {target.mention} (`{target.id}`)\n**Moderator:** {ctx.author.mention}\n**Reason:** {reason}\n**Messages deleted:** {deleted_count}")
+        await ctx.send(f"✅ **{target}** banned. **{deleted_count}** message(s) deleted.", delete_after=15)
 
     @commands.hybrid_command(name="strikes", description="View a user's strike count")
     @commands.has_permissions(moderate_members=True)
@@ -309,8 +369,21 @@ class Moderation(commands.Cog, name="Moderation"):
         elif total == 2:
             embed.add_field(name="Last Action", value="2 day timeout + DM warning", inline=False)
             embed.add_field(name="⚠️ Next Strike", value="**Ban** — one more strike and they're banned", inline=False)
-        embed.set_footer(text=f"Strike system: 1=10h timeout, 2=2d timeout, 3=ban")
+        embed.set_footer(text="Strike system: 1=10h timeout, 2=2d timeout, 3=ban")
         await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="resetstrikes", description="Reset a user's strike count to 0")
+    @commands.has_permissions(moderate_members=True)
+    @discord.app_commands.describe(user="User ID or @mention")
+    async def resetstrikes_cmd(self, ctx: commands.Context, user: str) -> None:
+        uid = parse_user_id(user)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        await reset_strikes(uid)
+        await log_action(self.bot, "✅ Strikes Reset",
+                         f"**User ID:** `{uid}`\n**Moderator:** {ctx.author.mention}")
+        await ctx.send(f"✅ Strikes reset for <@{uid}>.", delete_after=15)
 
     @commands.hybrid_command(name="mute", description="Timeout a user")
     @commands.has_permissions(moderate_members=True)
@@ -396,6 +469,21 @@ class Moderation(commands.Cog, name="Moderation"):
         deleted = await ctx.channel.purge(limit=count + 1)
         await ctx.send(f"🧹 Deleted **{len(deleted) - 1}** message(s).", delete_after=10)
 
+    @commands.hybrid_command(name="nuke", description="Delete all messages in this channel and recreate it")
+    @commands.has_permissions(manage_channels=True)
+    async def nuke_cmd(self, ctx: commands.Context) -> None:
+        """Nuke the channel — clone it, delete the old one. Preserves permissions and position."""
+        position = ctx.channel.position
+        new_channel = await ctx.channel.clone(reason=f"Nuke by {ctx.author}")
+        await new_channel.edit(position=position)
+        await ctx.channel.delete(reason=f"Nuke by {ctx.author}")
+        await new_channel.send(embed=discord.Embed(
+            description=f"💥 Channel nuked by {ctx.author.mention} — all messages deleted.",
+            color=COLOR_ERR,
+        ), delete_after=10)
+        await log_action(self.bot, "💥 Channel Nuked",
+                         f"**Channel:** {new_channel.mention}\n**Moderator:** {ctx.author.mention}")
+
     @commands.hybrid_command(name="slowmode", description="Set channel slowmode")
     @commands.has_permissions(manage_channels=True)
     @discord.app_commands.describe(seconds="Slowmode in seconds (0-21600, 0=off)")
@@ -429,6 +517,83 @@ class Moderation(commands.Cog, name="Moderation"):
         await log_action(self.bot, "🔓 Channel Unlocked",
                          f"**Channel:** {target.mention}\n**Moderator:** {ctx.author.mention}")
         await ctx.send(f"🔓 {target.mention} has been unlocked.", delete_after=10)
+
+    @commands.hybrid_command(name="roleinfo", description="Show information about a role")
+    @commands.has_permissions(moderate_members=True)
+    @discord.app_commands.describe(role="Role to view info about")
+    async def roleinfo_cmd(self, ctx: commands.Context, role: discord.Role) -> None:
+        embed = discord.Embed(title=f"📋 Role: {role.name}", color=role.color or BOT_COLOR)
+        embed.add_field(name="ID", value=f"`{role.id}`", inline=True)
+        embed.add_field(name="Members", value=str(len(role.members)), inline=True)
+        embed.add_field(name="Mentionable", value="Yes" if role.mentionable else "No", inline=True)
+        embed.add_field(name="Hoisted", value="Yes" if role.hoist else "No", inline=True)
+        embed.add_field(name="Position", value=str(role.position), inline=True)
+        embed.add_field(name="Color", value=str(role.color), inline=True)
+        perms = [p.replace("_", " ").title() for p, v in role.permissions if v]
+        embed.add_field(name="Key Permissions", value=", ".join(perms[:10]) if perms else "None", inline=False)
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="roleadd", description="Add a role to a user")
+    @commands.has_permissions(manage_roles=True)
+    @discord.app_commands.describe(user="User ID or @mention", role="Role to add")
+    async def roleadd_cmd(self, ctx: commands.Context, user: str, role: discord.Role) -> None:
+        uid = parse_user_id(user)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        member = ctx.guild.get_member(uid)
+        if member is None:
+            await ctx.send("❌ Member not found.", delete_after=10)
+            return
+        try:
+            await member.add_roles(role, reason=f"{ctx.author}: roleadd")
+        except discord.Forbidden:
+            await ctx.send("❌ I can't manage that role (hierarchy/permissions).", delete_after=10)
+            return
+        await ctx.send(f"✅ Added {role.mention} to {member.mention}.", delete_after=10)
+
+    @commands.hybrid_command(name="roletake", description="Remove a role from a user")
+    @commands.has_permissions(manage_roles=True)
+    @discord.app_commands.describe(user="User ID or @mention", role="Role to remove")
+    async def roletake_cmd(self, ctx: commands.Context, user: str, role: discord.Role) -> None:
+        uid = parse_user_id(user)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        member = ctx.guild.get_member(uid)
+        if member is None:
+            await ctx.send("❌ Member not found.", delete_after=10)
+            return
+        try:
+            await member.remove_roles(role, reason=f"{ctx.author}: roletake")
+        except discord.Forbidden:
+            await ctx.send("❌ I can't manage that role (hierarchy/permissions).", delete_after=10)
+            return
+        await ctx.send(f"✅ Removed {role.mention} from {member.mention}.", delete_after=10)
+
+    @commands.hybrid_command(name="timeoutinfo", description="Check when a user's timeout expires")
+    @commands.has_permissions(moderate_members=True)
+    @discord.app_commands.describe(user="User ID or @mention")
+    async def timeoutinfo_cmd(self, ctx: commands.Context, user: str) -> None:
+        uid = parse_user_id(user)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        member = ctx.guild.get_member(uid)
+        if member is None:
+            await ctx.send("❌ Member not found.", delete_after=10)
+            return
+        if not member.timed_out:
+            await ctx.send(f"✅ {member.mention} is not currently timed out.")
+            return
+        remaining = member.timed_out_until - discord.utils.utcnow()
+        mins = int(remaining.total_seconds() / 60)
+        embed = discord.Embed(
+            title="🔇 Timeout Info",
+            description=f"{member.mention} is timed out for **{mins}** more minutes.\n\nExpires: {discord.utils.format_dt(member.timed_out_until, style='R')}",
+            color=COLOR_WARN,
+        )
+        await ctx.send(embed=embed)
 
 
 async def setup(bot: commands.Bot) -> None:

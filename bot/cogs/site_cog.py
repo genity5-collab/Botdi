@@ -243,7 +243,7 @@ class SiteCog(commands.Cog, name="AppEngineering"):
         if result.get("build_status") == "blocked":
             await progress_msg.edit(embed=discord.Embed(
                 title="🚫 Request blocked",
-                description=f"This request was blocked by the safety filter.\n\n**Reason:** `{result.get('error', 'Violates safety policy')}`\n\nBotdi does not generate phishing pages, scams, malware, or other malicious content.",
+                description=f"This request was blocked by the safety filter.\n\n**Reason:** `{result.get('error', 'Violates safety policy')}`\n\nVyrion does not generate phishing pages, scams, malware, or other malicious content.",
                 color=COLOR_ERR,
             ))
             return
@@ -304,7 +304,7 @@ class SiteCog(commands.Cog, name="AppEngineering"):
             inline=False,
         )
 
-        footer = "Botdi App Engineering"
+        footer = "Vyrion App Engineering"
         if remaining is not None:
             footer += f" • {remaining}/{SITE_FREE_MONTHLY_LIMIT} credits left this month"
             if remaining == 0:
@@ -331,12 +331,12 @@ class SiteCog(commands.Cog, name="AppEngineering"):
             color=COLOR_OK,
         )
 
-    @commands.hybrid_command(name="setkey", description="Set your own Gemini API key for /site (uses your quota instead of Botdi's)")
+    @commands.hybrid_command(name="setkey", description="Set your own Gemini API key for /site (uses your quota instead of Vyrion's)")
     @discord.app_commands.describe(api_key="Your Gemini API key (starts with AIza)")
     async def setkey_cmd(self, ctx: commands.Context, *, api_key: str) -> None:
         if ctx.guild is not None:
             await ctx.send(embed=discord.Embed(
-                description="❌ Please use `/setkey` in a DM to Botdi to keep your key private.",
+                description="❌ Please use `/setkey` in a DM to Vyrion to keep your key private.",
                 color=COLOR_ERR,
             ), delete_after=10)
             return
@@ -356,7 +356,7 @@ class SiteCog(commands.Cog, name="AppEngineering"):
     @commands.hybrid_command(name="removekey", description="Remove your stored Gemini API key")
     async def removekey_cmd(self, ctx: commands.Context) -> None:
         if ctx.guild is not None:
-            await ctx.send("❌ Please use `/removekey` in a DM to Botdi.", delete_after=10)
+            await ctx.send("❌ Please use `/removekey` in a DM to Vyrion.", delete_after=10)
             return
         removed = await site_store.remove_user_gemini_key(ctx.author.id)
         await ctx.send(embed=discord.Embed(
