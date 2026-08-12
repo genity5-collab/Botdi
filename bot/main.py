@@ -1,20 +1,27 @@
 """
 Discord Bot — Entry point
+
+Starts both the Discord bot and the preview HTTP server.
+The preview server serves /<project_id> for App Engineering previews.
+Railway health check hits /health.
 """
 from __future__ import annotations
 import asyncio
 import datetime
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
 import discord
 from discord.ext import commands, tasks
+from aiohttp import web
 
 from config import DISCORD_TOKEN, BOT_PREFIX
 from cogs.support import SupportView
 import log_handler as _log_handler
+from preview_server import create_preview_app
 
 DATA_DIR = Path(__file__).parent / "data"
 STATUS_FILE = DATA_DIR / "status.json"
@@ -30,6 +37,8 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.dm_messages = True
+
+PREVIEW_PORT = int(os.environ.get("PORT", 8080))
 
 
 class Bot(commands.Bot):
@@ -48,8 +57,11 @@ class Bot(commands.Bot):
             "cogs.fun",
             "cogs.site_cog",
         ):
-            await self.load_extension(ext)
-            logging.info("Loaded: %s", ext)
+            try:
+                await self.load_extension(ext)
+                logging.info("Loaded: %s", ext)
+            except Exception as exc:
+                logging.error("Failed to load %s: %s", ext, exc, exc_info=True)
         self._write_status.start()
 
     async def on_ready(self) -> None:
@@ -96,11 +108,21 @@ class Bot(commands.Bot):
 
 
 async def main() -> None:
+    # Start preview HTTP server
+    app = create_preview_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PREVIEW_PORT)
+    await site.start()
+    logging.info("Preview server listening on :%d", PREVIEW_PORT)
+
+    # Start Discord bot
     bot = Bot()
     try:
         async with bot:
             await bot.start(DISCORD_TOKEN)
     finally:
+        await runner.cleanup()
         try:
             STATUS_FILE.write_text(json.dumps({
                 "online": False, "bot_name": "", "bot_id": "",

@@ -7,6 +7,7 @@ Security:
   - API keys are server-side env vars only, never sent to Discord or embedded in projects.
   - Generated code is validated, not executed on the main bot host.
   - Sandboxed file paths per project.
+  - Scam/phishing/malware prompts are blocked before generation.
 """
 from __future__ import annotations
 
@@ -28,6 +29,8 @@ from config import (
     SITE_MAX_DEBUG_RETRIES,
     SITE_PREVIEW_BASE_URL,
     SITE_FREE_MONTHLY_LIMIT,
+    SITE_BLOCKED_KEYWORDS,
+    SITE_BLOCKED_PATTERNS,
 )
 import site_store
 
@@ -59,6 +62,16 @@ Rules:
 5. Make the site responsive and modern-looking.
 6. If editing an existing project, modify the provided files and return ALL files.
 7. Output ONLY the JSON object. No text before or after.
+
+SAFETY — REFUSE THESE REQUESTS:
+- Phishing pages, fake login forms, credential harvesters
+- Scam sites, pyramid schemes, crypto scams, fake giveaways
+- Malware, keyloggers, ransomware, spyware
+- Sites that steal passwords, tokens, credit cards, or personal data
+- Counterfeit product stores, illegal drug marketplaces
+- Any site designed to deceive or defraud users
+
+If asked for any of the above, output: {"files": {}, "summary": "Request blocked: violates safety policy", "dependencies": [], "external_requests": [], "permissions": "Blocked"}
 """
 
 _EDIT_SYSTEM = """\
@@ -72,7 +85,8 @@ Rules:
 1. Modify only what the user asked for. Keep working parts intact.
 2. Do NOT include any API keys, secrets, or tokens in the files.
 3. Keep all files self-contained HTML/CSS/JS.
-4. Output ONLY the JSON object.
+4. Do NOT turn the site into a phishing page, scam, or anything malicious.
+5. Output ONLY the JSON object.
 """
 
 _DEBUG_SYSTEM = """\
@@ -83,6 +97,49 @@ Fix the error and output ONLY a JSON object with the same structure (all files).
 Do NOT add comments about what you changed — just return the fixed files.
 Output ONLY the JSON object.
 """
+
+
+# ── Scam / suspicious prompt detection ────────────────────────────────────────
+
+_BLOCKED_RE = [re.compile(p) for p in SITE_BLOCKED_PATTERNS]
+
+
+def check_prompt_safety(prompt: str) -> tuple[bool, str]:
+    """Check if a prompt asks for something malicious. Returns (safe, reason)."""
+    lower = prompt.lower()
+    for kw in SITE_BLOCKED_KEYWORDS:
+        if kw in lower:
+            return False, f"Blocked keyword: '{kw}'"
+    for pat in _BLOCKED_RE:
+        if pat.search(prompt):
+            return False, "Request matches a blocked pattern (phishing/scam/malware)"
+    return True, ""
+
+
+def _check_files_safety(files: dict[str, str]) -> tuple[bool, str]:
+    """Check if generated files contain suspicious patterns."""
+    all_content = " ".join(files.values()).lower()
+    # Check for credential harvesting patterns
+    suspicious_patterns = [
+        r"(?:action|url)\s*=\s*['\"]https?://(?!localhost|127\.0\.0\.1|botdi\.app)",
+        r"(?:fetch|xhr|axios)\s*\(\s*['\"]https?://(?!localhost|127\.0\.0\.1)",
+    ]
+    # Check for form submissions to external URLs (phishing indicator)
+    for fname, content in files.items():
+        if fname.endswith(".html"):
+            forms = re.findall(r"<form[^>]*action\s*=\s*['\"]([^'\"]+)['\"]", content, re.I)
+            for action in forms:
+                if action.startswith("http") and "botdi.app" not in action and "localhost" not in action:
+                    # External form submission — could be legit, just flag it
+                    log.info("[site] External form action detected: %s", action)
+    # Check for embedded credentials
+    for fname, content in files.items():
+        if re.search(r"(?:password|secret|token|api[_-]?key)\s*[:=]\s*['\"][A-Za-z0-9]{15,}['\"]", content, re.I):
+            return False, f"Embedded credentials detected in {fname}"
+    return True, ""
+
+
+# ── Provider chain ────────────────────────────────────────────────────────────
 
 
 async def _call_provider(
@@ -222,7 +279,7 @@ async def _capture_screenshot(files: dict[str, str], project_id: str) -> bytes |
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
             page = await browser.new_page(viewport={"width": 1280, "height": 720})
             await page.set_content(full_html, wait_until="networkidle")
             await page.wait_for_timeout(1500)
@@ -282,6 +339,21 @@ def _analyze_project(files: dict[str, str]) -> dict[str, Any]:
 async def generate_project(
     prompt: str, user_id: int, user_gemini_key: str | None = None
 ) -> dict[str, Any] | None:
+    # ── Safety check: block scam/phishing/malware prompts ─────────────────────
+    safe, reason = check_prompt_safety(prompt)
+    if not safe:
+        log.warning("[site] Blocked prompt: %s — %s", reason, prompt[:100])
+        return {
+            "project_id": None,
+            "files": {},
+            "build_status": "blocked",
+            "error": f"Request blocked: {reason}",
+            "preview_url": None,
+            "screenshot": None,
+            "summary": "Blocked by safety filter",
+            "info": {"contains": "N/A", "dependencies": 0, "external_requests": None, "api_usage": "None", "permissions": "Blocked"},
+        }
+
     project = await site_store.create_project(user_id, prompt)
     pid = project["id"]
     ai_prompt = f"Build a website with this description:\n\n{prompt}\n\nGenerate all files now."
@@ -296,6 +368,20 @@ async def generate_project(
         await site_store.add_edit_log_entry(pid, "Generation failed — invalid AI response", [], "failed")
         return None
     files = _strip_secrets(parsed["files"])
+    if not files:
+        # AI refused (safety policy)
+        await site_store.update_project(pid, {"build_status": "blocked"})
+        await site_store.add_edit_log_entry(pid, "Request blocked by safety policy", [], "blocked")
+        return {
+            "project_id": pid,
+            "files": {},
+            "build_status": "blocked",
+            "error": "Request blocked by safety policy",
+            "preview_url": None,
+            "screenshot": None,
+            "summary": "Blocked by safety filter",
+            "info": {"contains": "N/A", "dependencies": 0, "external_requests": None, "api_usage": "None", "permissions": "Blocked"},
+        }
     ok, msg = _validate_project(files)
     if not ok:
         files, debug_ok, debug_msg = await _auto_debug(pid, files, msg, user_gemini_key)
@@ -334,6 +420,20 @@ async def edit_project(
     project = await site_store.get_project(project_id)
     if not project:
         return None
+    # ── Safety check on edit prompt ────────────────────────────────────────────
+    safe, reason = check_prompt_safety(edit_prompt)
+    if not safe:
+        log.warning("[site:%s] Blocked edit: %s — %s", project_id, reason, edit_prompt[:100])
+        return {
+            "project_id": project_id,
+            "files": project["files"],
+            "build_status": "blocked",
+            "error": f"Edit blocked: {reason}",
+            "preview_url": project.get("preview_url"),
+            "screenshot": None,
+            "summary": "Blocked by safety filter",
+            "info": _analyze_project(project["files"]),
+        }
     current_files = project["files"]
     ai_prompt = (
         f"Current project files:\n{json.dumps(current_files, indent=2)}\n\n"
@@ -347,6 +447,17 @@ async def edit_project(
     if not parsed or "files" not in parsed:
         return None
     files = _strip_secrets(parsed["files"])
+    if not files:
+        return {
+            "project_id": project_id,
+            "files": project["files"],
+            "build_status": "blocked",
+            "error": "Edit blocked by safety policy",
+            "preview_url": project.get("preview_url"),
+            "screenshot": None,
+            "summary": "Blocked by safety filter",
+            "info": _analyze_project(project["files"]),
+        }
     ok, msg = _validate_project(files)
     if not ok:
         files, debug_ok, debug_msg = await _auto_debug(project_id, files, msg, user_gemini_key)
@@ -396,17 +507,26 @@ async def _auto_debug(
         )
         raw = await _generate_with_fallback(_DEBUG_SYSTEM, debug_prompt, user_gemini_key)
         if not raw:
-            return files, False, "Debug AI unavailable"
+            break
         parsed = _extract_json(raw)
         if not parsed or "files" not in parsed:
-            return files, False, "Debug AI returned invalid response"
+            break
         files = _strip_secrets(parsed["files"])
         ok, msg = _validate_project(files)
         if ok:
             await site_store.add_edit_log_entry(
-                project_id, f"Fixed on attempt {attempt + 1}",
+                project_id, f"Debug fix applied (attempt {attempt + 1})",
                 list(files.keys()), "success", "fixed",
             )
             return files, True, "Fixed"
-        error = msg
-    return files, False, f"Could not fix after {SITE_MAX_DEBUG_RETRIES} attempts"
+    return files, False, error
+
+
+# ── Preview server: check if user's sites should be offline ──────────────────
+
+async def is_user_sites_online(user_id: int, is_owner: bool) -> bool:
+    """Returns False if user has 0 credits and is not the bot owner (sites offline)."""
+    if is_owner:
+        return True
+    _, remaining = await site_store.check_site_usage(user_id)
+    return remaining > 0

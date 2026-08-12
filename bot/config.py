@@ -54,6 +54,27 @@ SITE_MAX_DEBUG_RETRIES = 3
 SITE_PREVIEW_BASE_URL = os.environ.get("SITE_PREVIEW_BASE_URL", "https://preview.botdi.app")
 SITE_PREVIEW_EXPIRY_HOURS = 24
 SITE_MAX_PROJECTS_PER_USER = 10
+
+# ── Scam / suspicious website prevention ─────────────────────────────────────
+SITE_BLOCKED_KEYWORDS: list[str] = [
+    "phishing", "scam", "fake login", "credential harvest", "carding",
+    "money laundering", "crypto scam", "pyramid scheme", "ponzi",
+    "fake giveaway", "free robux", "free nitro", "steam scam",
+    "account steal", "password steal", "token grab", "token logger",
+    "keylogger", "malware", "ransomware", "spyware", "trojan",
+    "credit card steal", "bank login steal", "ssn steal",
+    "counterfeit", "illegal drug", "weapons sale", "hitman",
+    "child exploit", "csam", "revenge porn",
+    "piracy", "cracked software", "warez", "serial key gen",
+]
+
+SITE_BLOCKED_PATTERNS = [
+    r"(?i)fake\s+(?:login|sign[\s-]?in|auth)\s+page",
+    r"(?i)(?:steal|grab|harvest)\s+(?:password|credential|token|credit)",
+    r"(?i)(?:free|unlimited)\s+(?:robux|nitro|vbucks|fortnite|discord\s+nitro)",
+    r"(?i)(?:phishing|spoofing)\s+(?:page|site|link|form)",
+]
+
 DM_DAILY_LIMIT = 15
 MEMORY_MAX_EXCHANGES = 50
 STRIKES_FOR_BAN = 3
