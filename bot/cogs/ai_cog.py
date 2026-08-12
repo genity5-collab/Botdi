@@ -29,18 +29,11 @@ from config import (
     OPENROUTER_MODEL,
     OPENROUTER_URL,
 )
-from data_store import (
-    add_memory,
-    check_dm_quota,
-    clear_memory,
-    get_memory,
-    save_memory,
-    use_dm_quota,
-)
+from data_store import add_memory, check_dm_quota, clear_memory, get_memory, save_memory, use_dm_quota
 from utils import check_pii_tos, check_profanity_at_bot, clean_ai_output, log_action
 
 log = logging.getLogger(__name__)
-_gemini = genai.Client(api_key=GEMINI_API_KEY)
+_gemini = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 _owners: set[int] = set()
 
 _SYSTEM = """You are Botdi, a helpful Discord AI assistant. Be warm, concise, and conversational.
@@ -55,12 +48,7 @@ async def _compat(url: str, key: str, model: str, messages: list[dict[str, str]]
         return None
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": messages, "max_tokens": 280, "temperature": 0.7},
-                timeout=aiohttp.ClientTimeout(total=12),
-            ) as response:
+            async with session.post(url, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, json={"model": model, "messages": messages, "max_tokens": 280, "temperature": 0.7}, timeout=aiohttp.ClientTimeout(total=12)) as response:
                 if response.status != 200:
                     return None
                 data: dict[str, Any] = await response.json()
@@ -74,22 +62,16 @@ async def _compat(url: str, key: str, model: str, messages: list[dict[str, str]]
 async def _generate(history: list[dict[str, str]], query: str) -> str | None:
     context = "\n".join(f"{item['role']}: {item['content']}" for item in history[-16:])
     prompt = f"{_SYSTEM}\n\nConversation:\n{context}\n\nUser: {query}"
-    for model in [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]:
-        try:
-            response = await asyncio.wait_for(
-                _gemini.aio.models.generate_content(model=model, contents=prompt),
-                timeout=10,
-            )
-            if response.text:
-                return clean_ai_output(response.text.strip())
-        except (asyncio.TimeoutError, Exception) as exc:
-            log.warning("Gemini provider failed: %s", exc)
+    if _gemini is not None:
+        for model in [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]:
+            try:
+                response = await asyncio.wait_for(_gemini.aio.models.generate_content(model=model, contents=prompt), timeout=10)
+                if response.text:
+                    return clean_ai_output(response.text.strip())
+            except Exception as exc:
+                log.warning("Gemini provider failed: %s", exc)
     messages = [{"role": "system", "content": _SYSTEM}, *history[-16:], {"role": "user", "content": query}]
-    for url, key, model in (
-        (GROQ_URL, GROQ_API_KEY, GROQ_MODEL),
-        (CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL),
-        (OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL),
-    ):
+    for url, key, model in ((GROQ_URL, GROQ_API_KEY, GROQ_MODEL), (CEREBRAS_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL), (OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL)):
         result = await _compat(url, key, model, messages)
         if result:
             return result
