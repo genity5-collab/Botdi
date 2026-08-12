@@ -1,17 +1,15 @@
 """
-General Cog (Slash Commands)
-────────────────────────────
-/ping, /uptime, /userinfo, /serverinfo, /help
+General Cog — /ping, /uptime, /userinfo, /serverinfo, /help
 """
-
 from __future__ import annotations
-
 import time
+import datetime
+
 import discord
-from discord import app_commands
 from discord.ext import commands
 
 from config import BOT_COLOR
+from utils import parse_user_id
 
 
 class General(commands.Cog, name="General"):
@@ -19,19 +17,19 @@ class General(commands.Cog, name="General"):
         self.bot = bot
         self._start = time.monotonic()
 
-    @app_commands.command(name="ping", description="Check bot and API latency.")
-    async def ping(self, interaction: discord.Interaction) -> None:
+    @commands.hybrid_command(name="ping", description="Check bot and API latency")
+    async def ping(self, ctx: commands.Context) -> None:
         ws_latency = round(self.bot.latency * 1000)
         before = time.monotonic()
-        await interaction.response.send_message("Pinging…")
+        msg = await ctx.send("Pinging…")
         rtt = round((time.monotonic() - before) * 1000)
         embed = discord.Embed(title="🏓 Pong!", color=BOT_COLOR)
         embed.add_field(name="WebSocket", value=f"`{ws_latency} ms`", inline=True)
         embed.add_field(name="Round-trip", value=f"`{rtt} ms`", inline=True)
-        await interaction.edit_original_response(content=None, embed=embed)
+        await msg.edit(content=None, embed=embed)
 
-    @app_commands.command(name="uptime", description="Show how long the bot has been running.")
-    async def uptime(self, interaction: discord.Interaction) -> None:
+    @commands.hybrid_command(name="uptime", description="Show how long the bot has been running")
+    async def uptime(self, ctx: commands.Context) -> None:
         elapsed = int(time.monotonic() - self._start)
         hours, rem = divmod(elapsed, 3600)
         minutes, seconds = divmod(rem, 60)
@@ -40,54 +38,50 @@ class General(commands.Cog, name="General"):
             description=f"**{hours}h {minutes}m {seconds}s**",
             color=BOT_COLOR,
         )
-        await interaction.response.send_message(embed=embed)
+        await ctx.send(embed=embed)
 
-    @app_commands.command(name="userinfo", description="Show information about a user.")
-    @app_commands.describe(target="User (optional)")
-    async def userinfo(self, interaction: discord.Interaction, target: discord.User | None = None) -> None:
-        await interaction.response.defer()
-        member = target or interaction.user
-        if isinstance(member, discord.User) and interaction.guild:
-            try:
-                member = await interaction.guild.fetch_member(member.id)
-            except discord.NotFound:
-                await interaction.followup.send("❌ Member not found in this server.")
+    @commands.hybrid_command(name="userinfo", description="Show information about a user")
+    @discord.app_commands.describe(user="User ID or @mention (optional, defaults to you)")
+    async def userinfo(self, ctx: commands.Context, *, target_str: str | None = None) -> None:
+        if target_str is None:
+            member = ctx.author
+        else:
+            uid = parse_user_id(target_str)
+            if uid is None:
+                await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
                 return
-        roles = (
-            [r.mention for r in getattr(member, "roles", []) if r != interaction.guild.default_role]
-            if interaction.guild else []
-        )
-        joined = discord.utils.format_dt(member.joined_at, style="R") if getattr(member, "joined_at", None) else "Unknown"
+            member = ctx.guild.get_member(uid)
+            if member is None:
+                try:
+                    member = await ctx.guild.fetch_member(uid)
+                except discord.NotFound:
+                    await ctx.send("❌ Member not found in this server.", delete_after=10)
+                    return
+        roles = [r.mention for r in member.roles if r != ctx.guild.default_role]
+        joined = discord.utils.format_dt(member.joined_at, style="R") if member.joined_at else "Unknown"
         created = discord.utils.format_dt(member.created_at, style="R")
-
-        embed = discord.Embed(title=str(member), color=BOT_COLOR)
+        embed = discord.Embed(title=str(member), color=member.color or BOT_COLOR)
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.add_field(name="ID", value=f"`{member.id}`", inline=True)
-        if joined != "Unknown":
-            embed.add_field(name="Joined Server", value=joined, inline=True)
+        embed.add_field(name="Joined Server", value=joined, inline=True)
         embed.add_field(name="Account Created", value=created, inline=True)
-        if hasattr(member, "top_role"):
-            embed.add_field(name="Top Role", value=member.top_role.mention, inline=True)
+        embed.add_field(name="Top Role", value=member.top_role.mention, inline=True)
         embed.add_field(name="Bot?", value="Yes" if member.bot else "No", inline=True)
+        embed.add_field(name="Status", value=str(member.status).title(), inline=True)
         if roles:
             embed.add_field(
                 name=f"Roles ({len(roles)})",
                 value=", ".join(roles[:10]) + ("…" if len(roles) > 10 else ""),
                 inline=False,
             )
-        await interaction.followup.send(embed=embed)
+        await ctx.send(embed=embed)
 
-    @app_commands.command(name="serverinfo", description="Show server information.")
-    async def serverinfo(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
-        g = interaction.guild
-        if not g:
-            await interaction.followup.send("❌ This command only works in servers.")
-            return
+    @commands.hybrid_command(name="serverinfo", description="Show server information")
+    async def serverinfo(self, ctx: commands.Context) -> None:
+        g = ctx.guild
         created = discord.utils.format_dt(g.created_at, style="R")
         bots = sum(1 for m in g.members if m.bot)
-        humans = (g.member_count or 0) - bots
-
+        humans = g.member_count - bots
         embed = discord.Embed(title=g.name, color=BOT_COLOR)
         if g.icon:
             embed.set_thumbnail(url=g.icon.url)
@@ -99,43 +93,74 @@ class General(commands.Cog, name="General"):
         embed.add_field(name="Boost Level", value=f"Level {g.premium_tier}", inline=True)
         if g.description:
             embed.add_field(name="Description", value=g.description, inline=False)
-        await interaction.followup.send(embed=embed)
+        await ctx.send(embed=embed)
 
-    @app_commands.command(name="help", description="Show all available commands.")
-    async def help_cmd(self, interaction: discord.Interaction) -> None:
+    @commands.hybrid_command(name="help", description="Show all available commands")
+    async def help_cmd(self, ctx: commands.Context) -> None:
         embed = discord.Embed(
-            title="📖 Vyrion — Command Reference",
-            description="All available slash commands",
+            title="📖 Command Reference",
+            description="All available commands. `<required>` `[optional]`\n"
+                       "Every command works as a **slash command** (type `/` in Discord) or with the `!` prefix.",
             color=BOT_COLOR,
         )
         embed.add_field(name="🤖 AI", value=(
-            "`/ask <question>` — Ask Vyrion anything\n"
-            "`/forget` — Clear your chat history\n"
-            "`/teach <fact>` — Admin: teach Vyrion about this server\n"
-            "`/untutor` — Admin: clear taught facts\n"
-            "`/roblox <kind> [query]` — Live Roblox lookup (game/user/trending)\n"
-            "*Or @mention me, say `vyrion …`, or DM me — I understand images too.*"
-        ), inline=False)
-        embed.add_field(name="🤖 Subagent", value=(
-            "`/subagent <prompt>` — Bot owner only: AI performs Discord actions from text\n"
-            "Creates channels, roles, events, embeds, sends messages, and more. Includes live edit log.\n"
-            "`/changelog` — View the live subagent action changelog"
+            "`@Botdi` — Ask anything (guild)\n"
+            "Say `botdi` anywhere — no @ needed!\n"
+            "💬 **DM me directly** — unlimited private chat\n"
+            "`@Botdi I'm being bullied by @user` — Trigger anti-bully investigation\n"
+            "*Say `forget me` in DMs to clear your chat history*"
         ), inline=False)
         embed.add_field(name="⚠️ Moderation", value=(
-            "`/strike` `/strikes` `/mute` `/unmute` `/warn` "
-            "`/kick` `/ban` `/purge` `/slowmode` `/lock` `/unlock`"
+            "`/strike <user> [reason]` — Issue a strike\n"
+            "`/strikes <user>` — View strike count\n"
+            "`/mute <user> [minutes] [reason]` — Timeout a user\n"
+            "`/unmute <user>` — Remove timeout\n"
+            "`/warn <user> [reason]` — Send a warning DM\n"
+            "`/kick <user> [reason]` — Kick a member\n"
+            "`/ban <user> [reason]` — Ban a member\n"
+            "`/purge <1–100>` — Delete recent messages\n"
+            "`/slowmode <seconds>` — Set channel slowmode\n"
+            "`/lock [#channel]` — Lock channel\n"
+            "`/unlock [#channel]` — Unlock channel"
         ), inline=False)
         embed.add_field(name="🎫 Support", value=(
-            "DM the bot to open a ticket · `!reply <id> <msg>` · `!close <id>` (staff)"
+            "`/ticket` — Open a support ticket\n"
+            "`/reply <ticket_id> <message>` — Reply to a ticket (staff)\n"
+            "`/close <ticket_id>` — Close a ticket (staff)"
+        ), inline=False)
+        embed.add_field(name="🏗️ App Engineering", value=(
+            "`/site <description>` — Build a website from a description\n"
+            "`/site <description> project_id:<id>` — Edit an existing project\n"
+            "`/myprojects` — List your projects\n"
+            "`/siteinfo <project_id>` — Show project details\n"
+            "`/setkey <api_key>` — Set your own Gemini API key (DM only)\n"
+            "`/removekey` — Remove your stored API key (DM only)"
+        ), inline=False)
+        embed.add_field(name="📢 Admin", value=(
+            '`/embed <#channel> "Title" <description>` — Post a branded embed'
         ), inline=False)
         embed.add_field(name="🎮 Fun", value=(
-            "`/roll` `/flip` `/8ball` `/poll` `/avatar` `/botinfo`"
+            "`/roll [sides]` — Roll a die\n"
+            "`/flip` — Coin flip\n"
+            "`/8ball <question>` — Magic 8-ball\n"
+            "`/poll <question>` — Yes/no poll\n"
+            "`/choose <opt1 | opt2 | …>` — Pick randomly\n"
+            "`/rps <rock|paper|scissors>` — Play RPS\n"
+            "`/math <expression>` — Calculate\n"
+            "`/avatar [user]` — Show avatar\n"
+            "`/botinfo` — Botdi stats\n"
+            "`/snipe` — Last deleted message (staff)\n"
+            "`/afk [reason]` — Set AFK status"
         ), inline=False)
         embed.add_field(name="ℹ️ General", value=(
-            "`/ping` `/uptime` `/userinfo` `/serverinfo` `/help`"
+            "`/ping` — Check latency\n"
+            "`/uptime` — Show uptime\n"
+            "`/userinfo [user]` — Show user info\n"
+            "`/serverinfo` — Show server info\n"
+            "`/help` — This menu"
         ), inline=False)
-        embed.set_footer(text="Vyrion — type / in Discord to see all commands")
-        await interaction.response.send_message(embed=embed)
+        embed.set_footer(text="<user> = ID or @mention • [optional]")
+        await ctx.send(embed=embed)
 
 
 async def setup(bot: commands.Bot) -> None:
