@@ -190,6 +190,7 @@ async def _call_provider(
     if "openrouter" in provider.get("url", ""):
         headers["HTTP-Referer"] = "https://vyrion.app"
         headers["X-Title"] = "Vyrion App Engineering"
+    log.info("[site:%s] Trying model=%s url=%s", provider["name"], provider.get("model", "?"), provider.get("url", "?"))
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(
@@ -205,12 +206,18 @@ async def _call_provider(
             ) as resp:
                 if resp.status != 200:
                     body = await resp.text()
-                    log.warning("[site:%s] HTTP %s: %s", provider["name"], resp.status, body[:200])
+                    log.warning("[site:%s] HTTP %s — model=%s: %s", provider["name"], resp.status, provider.get("model", "?"), body[:300])
                     return None
                 data = await resp.json()
-                content = data["choices"][0]["message"]["content"]
+                try:
+                    content = data["choices"][0]["message"]["content"]
+                except (KeyError, IndexError, TypeError):
+                    log.warning("[site:%s] Unexpected response format: %s", provider["name"], str(data)[:300])
+                    return None
                 if content and content.strip():
+                    log.info("[site:%s] Got response (%d chars) from model=%s", provider["name"], len(content), provider.get("model", "?"))
                     return content.strip()
+                log.warning("[site:%s] Empty response from model=%s", provider["name"], provider.get("model", "?"))
                 return None
     except asyncio.TimeoutError:
         log.warning("[site:%s] timed out after %ss", provider["name"], timeout)
@@ -323,16 +330,59 @@ async def _debug_ai(prompt: str, user_gemini_key: str | None = None) -> str | No
 
 def _extract_json(text: str) -> dict | None:
     text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
+    # Strip reasoning/thinking tags (gpt-oss uses <think>...</think>)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<reasoning>.*?</reasoning>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Strip markdown code fences
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\s*```$", "", text, flags=re.MULTILINE)
+    # Remove any text before the first { and after the last }
     start = text.find("{")
     end = text.rfind("}")
-    if start == -1 or end == -1:
+    if start == -1 or end == -1 or end <= start:
         return None
+    json_str = text[start : end + 1]
+    # Try direct parse
     try:
-        return json.loads(text[start : end + 1])
+        return json.loads(json_str)
     except json.JSONDecodeError:
+        pass
+    # Try fixing common issues: trailing commas
+    cleaned = re.sub(r",\s*}", "}", json_str)
+    cleaned = re.sub(r",\s*]", "]", cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+    # Try finding the last valid JSON object (model might output multiple)
+    last_start = json_str.rfind("{")
+    while last_start > 0:
+        candidate = json_str[last_start:]
+        # Find matching closing brace
+        brace_count = 0
+        for i, c in enumerate(candidate):
+            if c == "{":
+                brace_count += 1
+            elif c == "}":
+                brace_count -= 1
+                if brace_count == 0:
+                    try:
+                        result = json.loads(candidate[:i+1])
+                        if "files" in result:
+                            return result
+                    except json.JSONDecodeError:
+                        pass
+                    break
+        last_start = json_str.rfind("{", 0, last_start)
+    # Last resort: try json5-style (lenient)
+    try:
+        # Remove comments
+        no_comments = re.sub(r"//.*?$", "", json_str, flags=re.MULTILINE)
+        no_comments = re.sub(r"/\\*.*?\\*/", "", no_comments, flags=re.DOTALL)
+        return json.loads(no_comments)
+    except (json.JSONDecodeError, Exception):
+        log.warning("[site] Could not parse JSON from AI output (first 500 chars): %s", text[:500])
         return None
 
 
@@ -530,7 +580,7 @@ async def generate_project(
     ai_prompt += "Generate all files now."
     raw = await _generate_files(_ENGINEER_SYSTEM, ai_prompt, user_gemini_key)
     if not raw:
-        await _progress("failed", "❌ All AI providers unavailable. Tried: Groq, Fireworks, OpenRouter free (5 models). Check API keys.")
+        await _progress("failed", "❌ All AI providers unavailable. Tried: Groq (openai/gpt-oss-20b), OpenRouter (openai/gpt-oss-20b:free), Fireworks (accounts/fireworks/models/gpt-oss-20b), 5 free OpenRouter fallbacks, Owner Gemini. Check API keys and model names.")
         await site_store.update_project(pid, {"build_status": "failed"})
         await site_store.add_edit_log_entry(pid, "Generation failed — no AI provider available", [], "failed")
         return None

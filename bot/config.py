@@ -38,16 +38,21 @@ CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
 OPENROUTER_MODEL = "meta-llama/llama-3.2-3b-instruct:free"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# ── Vision model for chat (when user sends image/video) ───────────────────────
+# Google Gemma 4 26B A4B — supports text + image + video input, free on OpenRouter
+VISION_MODEL = "google/gemma-4-26b-a4b-it:free"
+VISION_URL = "https://openrouter.ai/api/v1/chat/completions"
+
 # ── Site engineering: SEPARATE chains for generation vs debugging ─────────────
-# Generation (better UI quality): Groq gpt-oss-20b → OpenRouter → Gemini → Fireworks
-SITE_GROQ_MODEL = "gpt-oss-20b"
+# All three use gpt-oss-20b from OpenAI — more providers = more reliability
+SITE_GROQ_MODEL = "openai/gpt-oss-20b"
 SITE_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-SITE_OPENROUTER_MODEL = "gpt-oss-20b:free"
+SITE_OPENROUTER_MODEL = "openai/gpt-oss-20b:free"
 SITE_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-SITE_FIREWORKS_MODEL = "gpt-oss-20b"
+SITE_FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-20b"
 SITE_FIREWORKS_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
 
-# Generation chain: Groq → OpenRouter → Fireworks → then Gemini (owner's key) as last resort
+# Generation chain: Groq → OpenRouter → Fireworks (all gpt-oss-20b, 3 fallbacks)
 SITE_GENERATE_CHAIN = [
     {"name": "groq", "url": SITE_GROQ_URL, "api_key": GROQ_API_KEY, "model": SITE_GROQ_MODEL},
     {"name": "openrouter", "url": SITE_OPENROUTER_URL, "api_key": OPENROUTER_API_KEY, "model": SITE_OPENROUTER_MODEL},
@@ -65,14 +70,14 @@ SITE_DEBUG_CHAIN = [
 SITE_THINK_CHAIN = SITE_GENERATE_CHAIN
 
 # Owner's Gemini key as last-resort fallback for site generation
-SITE_USE_OWNER_GEMINI = True  # If all gpt-oss providers fail, use owner's Gemini key
+SITE_USE_OWNER_GEMINI = True
 
 # Legacy compat
 SITE_PROVIDER_CHAIN = SITE_GENERATE_CHAIN
 
 # Extra free OpenRouter fallback models (if all gpt-oss models are down)
 SITE_OPENROUTER_FALLBACK_MODELS = [
-    "gpt-oss-20b:free",
+    "openai/gpt-oss-20b:free",
     "meta-llama/llama-3.2-3b-instruct:free",
     "meta-llama/llama-3.1-8b-instruct:free",
     "google/gemma-2-9b-it:free",

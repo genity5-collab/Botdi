@@ -5,12 +5,16 @@ Provider chain (all free/cheap): Gemini Flash → Groq → OpenRouter free → C
 Replies in plain text (no embeds — embeds can truncate content).
 Keeps responses short and conversational.
 
+Vision: When a user sends an image or video attachment, the AI switches to
+google/gemma-4-26b-a4b-it:free on OpenRouter (supports text+image+video input).
+
 IMPORTANT: When a user has an open support ticket, the AI does NOT respond to their DMs.
 Messages go to staff via the support cog instead.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import re
 from typing import Any
@@ -37,6 +41,8 @@ from config import (
     OPENROUTER_API_KEY,
     OPENROUTER_MODEL,
     OPENROUTER_URL,
+    VISION_MODEL,
+    VISION_URL,
 )
 from data_store import add_memory, check_dm_quota, clear_memory, get_memory, save_memory, use_dm_quota, get_user_open_ticket
 from utils import check_pii_tos, check_profanity_at_bot, clean_ai_output, log_action
@@ -83,6 +89,10 @@ _FREE_OPENROUTER_MODELS = [
     "google/gemma-2-9b-it:free",
     "qwen/qwen-2.5-7b-instruct:free",
 ]
+
+# File extensions that trigger vision mode
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 
 
 async def _compat(url: str, key: str, model: str, messages: list[dict[str, str]]) -> str | None:
@@ -149,6 +159,129 @@ async def _generate(history: list[dict[str, str]], query: str) -> str | None:
     return None
 
 
+# ── Vision: process image/video attachments with Gemma 4 ───────────────────────
+
+async def _download_attachment(url: str, max_size: int = 20 * 1024 * 1024) -> bytes | None:
+    """Download an attachment, max 20MB."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    return None
+                # Check content length
+                cl = resp.headers.get("Content-Length", "")
+                if cl and int(cl) > max_size:
+                    return None
+                data = await resp.read()
+                if len(data) > max_size:
+                    return None
+                return data
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        return None
+
+
+def _get_mime_type(filename: str) -> str:
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    mime_map = {
+        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "gif": "image/gif", "webp": "image/webp", "bmp": "image/bmp",
+        "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
+        "avi": "video/x-msvideo", "mkv": "video/x-matroska",
+    }
+    return mime_map.get(ext, "application/octet-stream")
+
+
+async def _generate_vision(
+    history: list[dict[str, str]],
+    query: str,
+    attachments: list[discord.Attachment],
+) -> str | None:
+    """Use google/gemma-4-26b-a4b-it:free on OpenRouter for image/video input."""
+    if not OPENROUTER_API_KEY:
+        return None
+
+    # Build multimodal content
+    content_parts: list[dict] = []
+
+    # Add conversation context as text
+    context = ""
+    if history:
+        context = "\n".join(f"{item['role']}: {item['content'][:200]}" for item in history[-6:])
+        context = f"Previous conversation:\n{context}\n\n"
+
+    # Add the user's text query
+    text_prompt = f"{_SYSTEM}\n\n{context}User message: {query or 'What do you see in this image/video?'}"
+    content_parts.append({"type": "text", "text": text_prompt})
+
+    # Download and add each attachment
+    for att in attachments[:4]:  # Max 4 attachments
+        mime = _get_mime_type(att.filename)
+        is_image = any(att.filename.lower().endswith(ext) for ext in _IMAGE_EXTS)
+        is_video = any(att.filename.lower().endswith(ext) for ext in _VIDEO_EXTS)
+
+        if not (is_image or is_video):
+            continue
+
+        # For images: download and send as base64 data URL
+        if is_image:
+            data = await _download_attachment(att.url)
+            if data:
+                b64 = base64.b64encode(data).decode("utf-8")
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"}
+                })
+
+        # For videos: pass the URL directly (OpenRouter/Gemma supports video URLs)
+        elif is_video:
+            # Discord attachment URLs are public and accessible
+            content_parts.append({
+                "type": "image_url",  # OpenRouter uses image_url type for video too in some cases
+                "image_url": {"url": att.url}
+            })
+            # Also add a text note about the video
+            content_parts.append({
+                "type": "text",
+                "text": f"(User sent a video file: {att.filename})"
+            })
+
+    if len(content_parts) <= 1:  # Only text, no media
+        return None
+
+    messages = [{"role": "user", "content": content_parts}]
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://vyrion.app",
+        "X-Title": "Vyrion AI",
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                VISION_URL,
+                headers=headers,
+                json={
+                    "model": VISION_MODEL,
+                    "messages": messages,
+                    "max_tokens": 500,
+                    "temperature": 0.7,
+                },
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    log.warning("[vision] HTTP %s: %s", resp.status, body[:200])
+                    return None
+                data = await resp.json()
+                text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                return clean_ai_output(text.strip(), max_len=600) if text else None
+    except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, IndexError, TypeError) as exc:
+        log.warning("[vision] failed: %s", exc)
+        return None
+
+
 class AICog(commands.Cog, name="AI"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -169,11 +302,10 @@ class AICog(commands.Cog, name="AI"):
         mentioned = self.bot.user is not None and self.bot.user in message.mentions
 
         # ── Don't respond in DMs if user has an open ticket ────────────────────
-        # The support cog handles their messages instead.
         if is_dm:
             existing_ticket = await get_user_open_ticket(message.author.id)
             if existing_ticket is not None:
-                return  # Let support cog handle it
+                return
 
         if not is_dm and not mentioned and "vyrion" not in message.content.lower() and "botdi" not in message.content.lower():
             return
@@ -183,9 +315,18 @@ class AICog(commands.Cog, name="AI"):
         if self.bot.user:
             query = query.replace(f"@{self.bot.user.display_name}", "")
         query = re.sub(r"(?i)^(?:vyrion|botdi)[,:\s]+", "", query).strip()
-        if not query:
+
+        # ── Check for image/video attachments → vision mode ────────────────────
+        attachments = message.attachments
+        has_media = any(
+            any(att.filename.lower().endswith(ext) for ext in _IMAGE_EXTS | _VIDEO_EXTS)
+            for att in attachments
+        )
+
+        if not query and not has_media:
             await message.reply("Hey! What's up?", delete_after=8)
             return
+
         if is_dm and not owner:
             allowed, _ = check_dm_quota(user.id)
             if not allowed:
@@ -205,12 +346,30 @@ class AICog(commands.Cog, name="AI"):
             await message.reply("Done — cleared our chat history.")
             return
         remaining = None if owner or not is_dm else use_dm_quota(user.id)
+
         async with message.channel.typing():
-            reply = await _generate(get_memory(user.id), query)
+            reply = None
+
+            # ── Vision mode: user sent image/video ────────────────────────────
+            if has_media and OPENROUTER_API_KEY:
+                media_types = []
+                for att in attachments:
+                    if any(att.filename.lower().endswith(ext) for ext in _IMAGE_EXTS):
+                        media_types.append("image")
+                    elif any(att.filename.lower().endswith(ext) for ext in _VIDEO_EXTS):
+                        media_types.append("video")
+                media_str = " + ".join(set(media_types))
+                log.info("[vision] User %s sent %s, switching to %s", user.id, media_str, VISION_MODEL)
+                reply = await _generate_vision(get_memory(user.id), query, attachments)
+
+            # ── Normal text mode ──────────────────────────────────────────────
+            if not reply:
+                reply = await _generate(get_memory(user.id), query or "What's in this image/video?")
+
         if not reply:
             await message.reply("AI services are busy right now — try again in a sec.", delete_after=15)
             return
-        add_memory(user.id, "user", query)
+        add_memory(user.id, "user", query or "(sent an image/video)")
         add_memory(user.id, "assistant", reply)
         await save_memory()
         if remaining is not None and remaining <= 3:
