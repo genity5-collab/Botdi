@@ -147,17 +147,62 @@ async def check_site_usage(user_id: int) -> tuple[bool, int]:
         return remaining > 0, max(0, remaining)
 
 
-async def consume_site_message(user_id: int) -> tuple[bool, int]:
+# Big project keywords — these cost 3 credits instead of 1
+_BIG_PROJECT_KEYWORDS = [
+    "dashboard", "social media", "e-commerce", "ecommerce", "store",
+    "platform", "marketplace", "full stack", "fullstack", "multi-page",
+    "multi page", "admin panel", "cms", "content management",
+    "chat app", "messaging app", "real-time", "realtime",
+    "booking system", "reservation", "inventory", "crm",
+    "erp", "learning management", "lms", "forum",
+    "multi-user", "authentication system", "user management",
+    "api", "backend", "database", "multiple pages",
+    "landing page with", "website with", "web app with",
+    "game", "interactive", "calculator with",
+    "kanban", "project management", "todo app with",
+    "portfolio with", "blog with", "shop with",
+]
+
+# Small project keywords — always 1 credit
+_SMALL_PROJECT_KEYWORDS = [
+    "landing page", "simple", "basic", "minimal", "one page",
+    "static", "portfolio", "resume", "coming soon",
+    "countdown", "timer", "clock", "calculator",
+    "quote", "joke", "fact", "weather widget",
+    "color picker", "tip calculator", "bill splitter",
+    "todo", "notes", "bookmark", "link tree",
+    "qr code", "badge", "card", "button",
+]
+
+
+def detect_project_size(prompt: str) -> int:
+    """Returns the credit cost: 1 for small, 3 for big projects."""
+    prompt_lower = prompt.lower()
+    # Check for big project keywords
+    big_score = sum(1 for kw in _BIG_PROJECT_KEYWORDS if kw in prompt_lower)
+    small_score = sum(1 for kw in _SMALL_PROJECT_KEYWORDS if kw in prompt_lower)
+    # If explicitly big or more big keywords than small
+    if big_score > 0 and big_score >= small_score:
+        return 3
+    # If mentions multiple features/pages, likely big
+    feature_count = prompt_lower.count(" and ") + prompt_lower.count(" with ") + prompt_lower.count(" also ")
+    if feature_count >= 3 and len(prompt) > 150:
+        return 3
+    return 1
+
+
+async def consume_site_message(user_id: int, credits: int = 1) -> tuple[bool, int]:
+    """Consume credits for a site generation. Big projects cost 3, small cost 1."""
     async with _lock:
         key = str(user_id)
         month = _current_month()
         entry = _usage.get(key, {})
         if entry.get("month") != month:
             entry = {"month": month, "count": 0}
-        if entry.get("count", 0) >= SITE_FREE_MONTHLY_LIMIT:
+        if entry.get("count", 0) + credits > SITE_FREE_MONTHLY_LIMIT:
             _usage[key] = entry
-            return False, 0
-        entry["count"] += 1
+            return False, max(0, SITE_FREE_MONTHLY_LIMIT - entry.get("count", 0))
+        entry["count"] += credits
         _usage[key] = entry
         _save(USAGE_FILE, _usage)
         return True, max(0, SITE_FREE_MONTHLY_LIMIT - entry["count"])

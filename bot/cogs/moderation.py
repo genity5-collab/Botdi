@@ -685,5 +685,140 @@ class Moderation(commands.Cog, name="Moderation"):
         await ctx.send(embed=embed)
 
 
+    @commands.hybrid_command(name="unban", description="Unban a user by ID")
+    @commands.has_permissions(ban_members=True)
+    @discord.app_commands.describe(user_id="User ID to unban")
+    async def unban_cmd(self, ctx: commands.Context, user_id: str) -> None:
+        uid = parse_user_id(user_id)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID.", delete_after=10)
+            return
+        try:
+            await ctx.guild.unban(discord.Object(id=uid), reason=f"Unbanned by {ctx.author}")
+            await ctx.send(embed=discord.Embed(
+                description=f"✅ User `{uid}` has been unbanned.",
+                color=COLOR_OK,
+            ))
+            await log_action(self.bot, "✅ Unban",
+                f"**User ID:** `{uid}`\n**Moderator:** {ctx.author.mention}",
+            )
+        except discord.NotFound:
+            await ctx.send("❌ That user is not banned.", delete_after=10)
+        except discord.Forbidden:
+            await ctx.send("❌ I don't have permission to unban.", delete_after=10)
+
+    @commands.hybrid_command(name="banlist", description="List all banned users in the server")
+    @commands.has_permissions(ban_members=True)
+    async def banlist_cmd(self, ctx: commands.Context) -> None:
+        await ctx.defer()
+        try:
+            bans = [entry async for entry in ctx.guild.bans()]
+        except discord.Forbidden:
+            await ctx.send("❌ I don't have permission to view bans.", delete_after=10)
+            return
+        if not bans:
+            await ctx.send("✅ No banned users.", delete_after=10)
+            return
+        lines = []
+        for entry in bans[:25]:
+            user = entry.user
+            reason = entry.reason or "No reason"
+            lines.append(f"`{user.id}` — {user.name}#{user.discriminator} — {reason[:50]}")
+        embed = discord.Embed(
+            title=f"🔨 Banned Users ({len(bans)} total, showing {min(25, len(bans))})",
+            description="\n".join(lines) or "None",
+            color=COLOR_WARN,
+        )
+        if len(bans) > 25:
+            embed.set_footer(text=f"...and {len(bans) - 25} more")
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="purgeuser", description="Delete messages from a specific user (last 100 messages)")
+    @commands.has_permissions(manage_messages=True)
+    @discord.app_commands.describe(user="User to purge messages from", count="Max messages to check (default 100)")
+    async def purgeuser_cmd(self, ctx: commands.Context, user: str, count: int = 100) -> None:
+        uid = parse_user_id(user)
+        if uid is None:
+            await ctx.send("❌ Invalid user ID or mention.", delete_after=10)
+            return
+        count = max(1, min(count, 100))
+        await ctx.defer()
+        deleted = 0
+        async for msg in ctx.channel.history(limit=count):
+            if msg.author.id == uid:
+                try:
+                    await msg.delete()
+                    deleted += 1
+                except discord.HTTPException:
+                    pass
+        await ctx.send(f"🧹 Deleted **{deleted}** messages from <@{uid}>.", delete_after=10)
+
+    @commands.hybrid_command(name="massrole", description="Add a role to multiple users at once")
+    @commands.has_permissions(manage_roles=True)
+    @discord.app_commands.describe(role="Role to add", users="Users (mentions or IDs, space-separated)")
+    async def massrole_cmd(self, ctx: commands.Context, role: discord.Role, *, users: str) -> None:
+        import re as _re
+        uids = _re.findall(r"<@!?&(\d+)>|<@!?(\d+)>|(\d{17,20})", users)
+        uids = [uid[0] or uid[1] or uid[2] for uid in uids]
+        if not uids:
+            await ctx.send("❌ No valid users found.", delete_after=10)
+            return
+        added = 0
+        for uid_str in uids[:20]:
+            member = ctx.guild.get_member(int(uid_str))
+            if member and role not in member.roles:
+                try:
+                    await member.add_roles(role, reason=f"Mass role by {ctx.author}")
+                    added += 1
+                except discord.Forbidden:
+                    pass
+        await ctx.send(f"✅ Added {role.mention} to **{added}** users.", delete_after=10)
+
+    @commands.hybrid_command(name="massremoverole", description="Remove a role from multiple users at once")
+    @commands.has_permissions(manage_roles=True)
+    @discord.app_commands.describe(role="Role to remove", users="Users (mentions or IDs, space-separated)")
+    async def massremoverole_cmd(self, ctx: commands.Context, role: discord.Role, *, users: str) -> None:
+        import re as _re
+        uids = _re.findall(r"<@!?&(\d+)>|<@!?(\d+)>|(\d{17,20})", users)
+        uids = [uid[0] or uid[1] or uid[2] for uid in uids]
+        if not uids:
+            await ctx.send("❌ No valid users found.", delete_after=10)
+            return
+        removed = 0
+        for uid_str in uids[:20]:
+            member = ctx.guild.get_member(int(uid_str))
+            if member and role in member.roles:
+                try:
+                    await member.remove_roles(role, reason=f"Mass role removal by {ctx.author}")
+                    removed += 1
+                except discord.Forbidden:
+                    pass
+        await ctx.send(f"✅ Removed {role.mention} from **{removed}** users.", delete_after=10)
+
+    @commands.hybrid_command(name="channellock", description="Lock a channel for a specific role")
+    @commands.has_permissions(manage_channels=True)
+    @discord.app_commands.describe(channel="Channel to lock (optional, defaults to current)", role="Role to lock (optional, defaults to @everyone)")
+    async def channellock_cmd(self, ctx: commands.Context, channel: discord.TextChannel | None = None, role: discord.Role | None = None) -> None:
+        ch = channel or ctx.channel
+        target_role = role or ctx.guild.default_role
+        try:
+            await ch.set_permissions(target_role, send_messages=False, reason=f"Channel lock by {ctx.author}")
+            await ctx.send(f"🔒 Locked {ch.mention} for {target_role.mention}.", delete_after=10)
+        except discord.Forbidden:
+            await ctx.send("❌ I don't have permission to manage that channel.", delete_after=10)
+
+    @commands.hybrid_command(name="channelunlock", description="Unlock a channel for a specific role")
+    @commands.has_permissions(manage_channels=True)
+    @discord.app_commands.describe(channel="Channel to unlock (optional, defaults to current)", role="Role to unlock (optional, defaults to @everyone)")
+    async def channelunlock_cmd(self, ctx: commands.Context, channel: discord.TextChannel | None = None, role: discord.Role | None = None) -> None:
+        ch = channel or ctx.channel
+        target_role = role or ctx.guild.default_role
+        try:
+            await ch.set_permissions(target_role, send_messages=True, reason=f"Channel unlock by {ctx.author}")
+            await ctx.send(f"🔓 Unlocked {ch.mention} for {target_role.mention}.", delete_after=10)
+        except discord.Forbidden:
+            await ctx.send("❌ I don't have permission to manage that channel.", delete_after=10)
+
+
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Moderation(bot))

@@ -103,7 +103,7 @@ async def get_user_open_ticket(user_id: int) -> str | None:
 
 # ── Conversation Memory ───────────────────────────────────────────────────────
 
-MAX_EXCHANGES = 25   # keep last 25 pairs = 50 messages per user
+MAX_EXCHANGES = 35   # keep last 35 pairs = 70 messages per user
 
 def get_memory(user_id: int) -> list[dict]:
     """Return stored message history for a user as OpenAI message dicts."""
@@ -114,7 +114,7 @@ def add_memory(user_id: int, role: str, content: str) -> list[dict]:
     Returns any messages that were dropped during trimming."""
     key  = str(user_id)
     hist = _memories.get(key, [])
-    hist.append({"role": role, "content": content[:800]})
+    hist.append({"role": role, "content": content[:1200]})
     dropped: list[dict] = []
     if len(hist) > MAX_EXCHANGES * 2:
         dropped = hist[:len(hist) - (MAX_EXCHANGES * 2)]

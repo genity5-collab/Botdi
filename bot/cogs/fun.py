@@ -1,109 +1,97 @@
 """
-Fun Cog (Slash Commands)
-"""
+Fun Cog — Useful utility commands (cleaned up — removed roll/flip/8ball/snipe).
 
+Kept: /poll, /avatar, /botinfo, /afk
+"""
 from __future__ import annotations
 
-import random
+import logging
+from datetime import datetime, timezone
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import BOT_COLOR
+log = logging.getLogger(__name__)
 
-_8BALL = ["Yes! ✅", "Definitely! ✅", "Maybe 🤔", "Ask later ⏳", "Nope ❌", "Don't count on it ❌"]
 
-class Fun(commands.Cog, name="Fun"):
+class Fun(commands.Cog, name="Utility"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self._snipe = {}
-        self._afk = {}
+        self._afk: dict[int, str] = {}
 
     @commands.Cog.listener()
-    async def on_message_delete(self, msg: discord.Message) -> None:
-        if not msg.author.bot:
-            self._snipe[msg.channel.id] = msg
-
-    @commands.Cog.listener()
-    async def on_message(self, msg: discord.Message) -> None:
-        if msg.author.bot:
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot or not message.guild:
             return
-        if msg.author.id in self._afk:
-            reason = self._afk.pop(msg.author.id)
+        # Remove AFK status when user sends a message
+        if message.author.id in self._afk:
+            del self._afk[message.author.id]
             try:
-                await msg.reply(f"Welcome back! 👋 Removed AFK: *{reason}*", delete_after=10)
-            except:
+                await message.reply("Welcome back! You're no longer AFK.", delete_after=5)
+            except discord.HTTPException:
                 pass
-        for user in msg.mentions:
+        # Mention AFK users
+        for user in message.mentions:
             if user.id in self._afk:
+                reason = self._afk[user.id]
                 try:
-                    await msg.reply(f"**{user.display_name}** is AFK: *{self._afk[user.id]}*", delete_after=15)
-                except:
+                    await message.reply(f"💤 **{user.display_name}** is AFK: {reason}", delete_after=10)
+                except discord.HTTPException:
                     pass
-
-    @app_commands.command(name="roll", description="Roll a die.")
-    @app_commands.describe(sides="Number of sides (default 6)")
-    async def roll(self, interaction: discord.Interaction, sides: int = 6) -> None:
-        if sides < 2 or sides > 1000:
-            await interaction.response.send_message("❌ Sides must be 2-1000", ephemeral=True)
-            return
-        result = random.randint(1, sides)
-        embed = discord.Embed(title=f"🎲 d{sides}", description=f"**{result}**", color=BOT_COLOR)
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="flip", description="Flip a coin.")
-    async def flip(self, interaction: discord.Interaction) -> None:
-        result = random.choice(["Heads 🪙", "Tails 🪙"])
-        embed = discord.Embed(title="Coin Flip", description=result, color=BOT_COLOR)
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="8ball", description="Ask the magic 8-ball.")
-    @app_commands.describe(question="Your question")
-    async def eight_ball(self, interaction: discord.Interaction, question: str) -> None:
-        answer = random.choice(_8BALL)
-        embed = discord.Embed(title="🎱 Magic 8-Ball", description=f"**Q:** {question}\n**A:** {answer}", color=BOT_COLOR)
-        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="poll", description="Create a yes/no poll.")
     @app_commands.describe(question="Poll question")
     async def poll(self, interaction: discord.Interaction, question: str) -> None:
-        embed = discord.Embed(title="📊 Poll", description=question, color=BOT_COLOR)
+        embed = discord.Embed(
+            title="📊 Poll",
+            description=f"**{question}**\n\n✅ Yes • ❌ No",
+            color=0x5865F2,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_footer(text=f"Asked by {interaction.user.display_name}")
         await interaction.response.send_message(embed=embed)
         msg = await interaction.original_response()
         await msg.add_reaction("✅")
         await msg.add_reaction("❌")
 
-    @app_commands.command(name="avatar", description="Show avatar.")
-    @app_commands.describe(user="User (optional)")
-    async def avatar(self, interaction: discord.Interaction, user: discord.User | None = None) -> None:
+    @app_commands.command(name="avatar", description="Show a user's avatar in full size.")
+    @app_commands.describe(user="User (optional, defaults to you)")
+    async def avatar(self, interaction: discord.Interaction, user: discord.Member | None = None) -> None:
         target = user or interaction.user
-        embed = discord.Embed(title=f"{target.display_name}'s Avatar", color=BOT_COLOR)
+        embed = discord.Embed(
+            title=f"🖼️ {target.display_name}'s Avatar",
+            color=0x5865F2,
+        )
         embed.set_image(url=target.display_avatar.url)
+        embed.add_field(name="PNG", value=f"[Link]({target.display_avatar.replace(format='png', size=4096).url})")
+        embed.add_field(name="User ID", value=f"`{target.id}`")
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="botinfo", description="Bot stats.")
+    @app_commands.command(name="botinfo", description="Show bot information and stats.")
     async def botinfo(self, interaction: discord.Interaction) -> None:
-        embed = discord.Embed(title="🤖 Bot Info", color=BOT_COLOR)
-        embed.add_field(name="Guilds", value=len(self.bot.guilds), inline=True)
-        embed.add_field(name="Latency", value=f"{round(self.bot.latency * 1000)}ms", inline=True)
+        bot = self.bot
+        embed = discord.Embed(
+            title="🤖 Vyrion",
+            description="Your AI assistant for Discord — chat, site engineering, moderation, and more.",
+            color=0x5865F2,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Servers", value=str(len(bot.guilds)), inline=True)
+        embed.add_field(name="Users", value=str(sum(g.member_count or 0 for g in bot.guilds)), inline=True)
+        embed.add_field(name="Latency", value=f"{round(bot.latency * 1000)}ms", inline=True)
+        embed.add_field(name="Commands", value="/site /create /strike /poll /avatar /help", inline=False)
+        embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+        embed.set_footer(text="Vyrion • Powered by gpt-oss-20b & Gemini")
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="snipe", description="Last deleted message.")
-    async def snipe(self, interaction: discord.Interaction) -> None:
-        msg = self._snipe.get(interaction.channel_id)
-        if not msg:
-            await interaction.response.send_message("❌ No deleted messages", ephemeral=True)
-            return
-        embed = discord.Embed(description=msg.content or "*[empty]*", color=BOT_COLOR)
-        embed.set_author(name=str(msg.author), icon_url=msg.author.display_avatar.url)
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="afk", description="Set AFK.")
-    @app_commands.describe(reason="AFK reason")
-    async def afk(self, interaction: discord.Interaction, reason: str | None = None) -> None:
-        reason = reason or "AFK"
+    @app_commands.command(name="afk", description="Set yourself as AFK.")
+    @app_commands.describe(reason="Why are you AFK? (optional)")
+    async def afk(self, interaction: discord.Interaction, reason: str = "No reason provided") -> None:
         self._afk[interaction.user.id] = reason
-        await interaction.response.send_message(f"✅ AFK: *{reason}*", ephemeral=True)
+        await interaction.response.send_message(
+            f"💤 {interaction.user.mention} is now AFK: **{reason}**", delete_after=10
+        )
 
 
 async def setup(bot: commands.Bot) -> None:

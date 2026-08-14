@@ -464,7 +464,8 @@ def _create_zip(files: dict[str, str]) -> io.BytesIO:
 
 
 def _preview_url(project_id: str) -> str:
-    return f"{SITE_PREVIEW_BASE_URL}/{project_id}"
+    """Studio URL — opens the project in the Vyrion Studio gallery."""
+    return f"{SITE_PREVIEW_BASE_URL}/view/{project_id}"
 
 
 def _analyze_project(files: dict[str, str], dependencies: list[str] | None = None) -> dict[str, Any]:

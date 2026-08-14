@@ -1,5 +1,15 @@
 """
-General Cog — /ping, /uptime, /userinfo, /serverinfo, /help
+General Cog — Server utility commands.
+
+Commands:
+  /ping          — Bot and API latency
+  /uptime        — Bot uptime
+  /userinfo      — User information
+  /serverinfo    — Server information
+  /membercount   — Member count breakdown
+  /rolelist      — List all roles in the server
+  /channelinfo    — Channel information
+  /help          — Show all commands
 """
 from __future__ import annotations
 import time
@@ -95,6 +105,64 @@ class General(commands.Cog, name="General"):
             embed.add_field(name="Description", value=g.description, inline=False)
         await ctx.send(embed=embed)
 
+    @commands.hybrid_command(name="membercount", description="Show detailed member count breakdown")
+    async def membercount(self, ctx: commands.Context) -> None:
+        g = ctx.guild
+        total = g.member_count or 0
+        bots = sum(1 for m in g.members if m.bot)
+        humans = total - bots
+        online = sum(1 for m in g.members if m.status != discord.Status.offline)
+        embed = discord.Embed(
+            title="👥 Member Count",
+            color=BOT_COLOR,
+        )
+        embed.add_field(name="Total", value=str(total), inline=True)
+        embed.add_field(name="Humans", value=str(humans), inline=True)
+        embed.add_field(name="Bots", value=str(bots), inline=True)
+        embed.add_field(name="Online", value=str(online), inline=True)
+        embed.add_field(name="Boosts", value=str(g.premium_subscription_count), inline=True)
+        embed.add_field(name="Boost Level", value=f"Level {g.premium_tier}", inline=True)
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="rolelist", description="List all roles in the server")
+    @commands.has_permissions(manage_roles=True)
+    async def rolelist(self, ctx: commands.Context) -> None:
+        roles = [r for r in ctx.guild.roles if r != ctx.guild.default_role]
+        if not roles:
+            await ctx.send("No roles found.", delete_after=10)
+            return
+        lines = []
+        for role in roles[:20]:
+            member_count = len(role.members)
+            lines.append(f"{role.mention} — {member_count} members (pos {role.position})")
+        embed = discord.Embed(
+            title=f"📋 Roles ({len(roles)} total, showing {min(20, len(roles))})",
+            description="\n".join(lines) or "No roles",
+            color=BOT_COLOR,
+        )
+        if len(roles) > 20:
+            embed.set_footer(text=f"…and {len(roles) - 20} more roles")
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="channelinfo", description="Show information about a channel")
+    @discord.app_commands.describe(channel="Channel to inspect (optional, defaults to current)")
+    async def channelinfo(self, ctx: commands.Context, channel: discord.TextChannel | None = None) -> None:
+        ch = channel or ctx.channel
+        created = discord.utils.format_dt(ch.created_at, style="R")
+        embed = discord.Embed(
+            title=f"📢 #{ch.name}",
+            color=BOT_COLOR,
+        )
+        embed.add_field(name="ID", value=f"`{ch.id}`", inline=True)
+        embed.add_field(name="Type", value=str(ch.type).replace("TextChannel", "Text").replace("VoiceChannel", "Voice"), inline=True)
+        embed.add_field(name="Created", value=created, inline=True)
+        embed.add_field(name="Category", value=ch.category.name if ch.category else "None", inline=True)
+        embed.add_field(name="NSFW", value="Yes" if ch.nsfw else "No", inline=True)
+        embed.add_field(name="Slowmode", value=f"{ch.slowmode_delay}s", inline=True)
+        if ch.topic:
+            embed.add_field(name="Topic", value=ch.topic[:200], inline=False)
+        await ctx.send(embed=embed)
+
     @commands.hybrid_command(name="help", description="Show all available commands")
     async def help_cmd(self, ctx: commands.Context) -> None:
         embed = discord.Embed(
@@ -105,24 +173,27 @@ class General(commands.Cog, name="General"):
         embed.add_field(name="🤖 AI", value=(
             "`@Vyrion` — Ask anything (guild)\n"
             "DM me directly — private chat\n"
-            "Say `forget me` in DMs to clear history"
+            "📷 Send images/videos — I can see them!\n"
+            "🧠 Long-term memory — I remember your name, interests\n"
+            "Say `forget me` in DMs to wipe memory"
         ), inline=False)
         embed.add_field(name="🏗️ App Engineering", value=(
-            "`/site <description>` — Build a website\n"
-            "`/site <edit>` — Edit your latest project\n"
+            "`/site <description>` — Build a website (owner only)\n"
             "`/myprojects` — List your projects\n"
-            "`/sitecredits` — Check remaining credits\n"
             "`/deleteproject <id>` — Delete a project\n"
-            "`/setkey <key>` — Add your Gemini key (DM only)\n"
-            "`/removekey` — Remove your key (DM only)"
+            "💡 Big projects cost 3 credits, small ones cost 1"
         ), inline=False)
         embed.add_field(name="⚠️ Moderation", value=(
             "`/strike` — 1=10h timeout, 2=2d timeout, 3=ban\n"
             "`/strikes` `/resetstrikes` — View/reset strikes\n"
-            "`/kick` `/ban` `/softban` `/cleanban`\n"
+            "`/kick` `/ban` `/unban` `/softban` `/cleanban`\n"
+            "`/banlist` — List all banned users\n"
             "`/mute` `/unmute` `/warn` `/purge` `/nuke`\n"
+            "`/purgeuser` — Delete messages from a specific user\n"
             "`/slowmode` `/lock` `/unlock`\n"
+            "`/channellock` `/channelunlock` — Lock for specific roles\n"
             "`/roleinfo` `/roleadd` `/roletake`\n"
+            "`/massrole` `/massremoverole` — Bulk role management\n"
             "`/timeoutinfo` — Check timeout expiry"
         ), inline=False)
         embed.add_field(name="🎫 Support", value=(
@@ -130,10 +201,6 @@ class General(commands.Cog, name="General"):
             "`/reply` `/close` `/decline` — Staff commands\n"
             "`/tickets` — List open tickets (staff)\n"
             f"⏰ Auto-close after 12h of inactivity"
-        ), inline=False)
-        embed.add_field(name="🎮 Fun", value=(
-            "`/roll` `/flip` `/8ball` `/poll`\n"
-            "`/avatar` `/botinfo` `/snipe` `/afk`"
         ), inline=False)
         embed.add_field(name="📝 Create", value=(
             "`/create channel` — Text/voice/announcement channel\n"
@@ -145,11 +212,13 @@ class General(commands.Cog, name="General"):
             "`/create stage` — Stage channel\n"
             "`/create forum` — Forum channel"
         ), inline=False)
-        embed.add_field(name="ℹ️ General", value=(
-            "`/ping` `/uptime` `/userinfo`\n"
-            "`/serverinfo` `/help`"
+        embed.add_field(name="🛠️ Server", value=(
+            "`/ping` `/uptime` `/botinfo`\n"
+            "`/userinfo` `/serverinfo` `/membercount`\n"
+            "`/rolelist` `/channelinfo` `/avatar`\n"
+            "`/poll` `/afk` `/embed` `/announce` `/help`"
         ), inline=False)
-        embed.set_footer(text="Vyrion • 5 free /site credits/month • Owner has unlimited")
+        embed.set_footer(text="Vyrion • AI App Engineering • Smart Moderation")
         await ctx.send(embed=embed)
 
 

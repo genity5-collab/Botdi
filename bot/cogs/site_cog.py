@@ -41,7 +41,7 @@ class SiteView(discord.ui.View):
         self.preview_url = preview_url
         self.owner_id = owner_id
 
-    @discord.ui.button(label="Open Preview", style=discord.ButtonStyle.link, emoji="🌐")
+    @discord.ui.button(label="Open in Studio", style=discord.ButtonStyle.link, emoji="🏗️")
     async def open_preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         button.url = self.preview_url
 
@@ -98,18 +98,12 @@ class SiteCog(commands.Cog, name="AppEngineering"):
         user_gemini_key = await site_store.get_user_gemini_key(user.id)
 
         if not is_owner:
-            allowed, _ = await site_store.check_site_usage(user.id)
-            if not allowed:
-                await ctx.send(embed=discord.Embed(
-                    title="⚠️ App creation paused",
-                    description=(
-                        f"Your **{SITE_FREE_MONTHLY_LIMIT}** monthly app credits are used up.\n\n"
-                        f"🚫 All your sites are **offline** until credits reset next month.\n\n"
-                        f"Add your own API key with `/setkey` to continue building."
-                    ),
-                    color=COLOR_WARN,
-                ))
-                return
+            await ctx.send(embed=discord.Embed(
+                title="🔒 Owner Only",
+                description="App Engineering is restricted to the bot owner. Use `/help` to see what you can do.",
+                color=COLOR_ERR,
+            ), delete_after=15)
+            return
 
         is_edit = False
         target_project_id = project_id
@@ -134,17 +128,10 @@ class SiteCog(commands.Cog, name="AppEngineering"):
                 target_project_id = latest["id"]
                 is_edit = True
 
-        if not is_owner:
-            consumed, remaining = await site_store.consume_site_message(user.id)
-            if not consumed:
-                await ctx.send(embed=discord.Embed(
-                    title="⚠️ App creation paused",
-                    description="Your monthly app credits were used by another request.\n🚫 All your sites are now **offline** until credits reset.\n\nAdd your own API key with `/setkey` to continue.",
-                    color=COLOR_WARN,
-                ))
-                return
-        else:
-            remaining = None
+        # ── Detect project size for display ────────────────────────────────
+        project_credits = site_store.detect_project_size(description)
+        is_big = project_credits > 1
+        remaining = None  # Owner = unlimited
 
         # ── Live progress message ───────────────────────────────────────────────
         progress_embed = discord.Embed(
@@ -269,7 +256,11 @@ class SiteCog(commands.Cog, name="AppEngineering"):
 
         embed = discord.Embed(
             title="✅ Site ready!",
-            description=f"**Project ID:** `{pid}`\n" + (f"**Summary:** {result.get('summary')}" if result.get("summary") else ""),
+            description=(
+                f"**Project ID:** `{pid}`\n"
+                + (f"**Summary:** {result.get('summary')}\n" if result.get("summary") else "")
+                + f"**Studio:** {result.get('preview_url', 'N/A')}"
+            ),
             color=COLOR_OK,
             timestamp=discord.utils.utcnow(),
         )
@@ -304,17 +295,13 @@ class SiteCog(commands.Cog, name="AppEngineering"):
             inline=False,
         )
 
-        footer = "Vyrion App Engineering"
-        if remaining is not None:
-            footer += f" • {remaining}/{SITE_FREE_MONTHLY_LIMIT} credits left this month"
-            if remaining == 0:
-                footer += " • ⚠️ Sites offline until reset"
+        footer = f"Vyrion App Engineering • {'Big project' if is_big else 'Standard'} ({project_credits} credits)"
         embed.set_footer(text=footer)
 
         view = SiteView(pid, files, result.get("preview_url"), user.id)
         for child in view.children:
-            if isinstance(child, discord.ui.Button) and child.label == "Open Preview":
-                child.url = result.get("preview_url") or "https://botdi.app"
+            if isinstance(child, discord.ui.Button) and child.label == "Open in Studio":
+                child.url = result.get("preview_url") or "https://vyrion.app"
 
         if result.get("screenshot"):
             await progress_msg.edit(
@@ -331,39 +318,6 @@ class SiteCog(commands.Cog, name="AppEngineering"):
             color=COLOR_OK,
         )
 
-    @commands.hybrid_command(name="setkey", description="Set your own Gemini API key for /site (uses your quota instead of Vyrion's)")
-    @discord.app_commands.describe(api_key="Your Gemini API key (starts with AIza)")
-    async def setkey_cmd(self, ctx: commands.Context, *, api_key: str) -> None:
-        if ctx.guild is not None:
-            await ctx.send(embed=discord.Embed(
-                description="❌ Please use `/setkey` in a DM to Vyrion to keep your key private.",
-                color=COLOR_ERR,
-            ), delete_after=10)
-            return
-        if not api_key.startswith("AIza"):
-            await ctx.send(embed=discord.Embed(
-                description="❌ That doesn't look like a valid Gemini API key (should start with 'AIza').",
-                color=COLOR_ERR,
-            ))
-            return
-        await site_store.set_user_gemini_key(ctx.author.id, api_key)
-        await ctx.send(embed=discord.Embed(
-            title="✅ API Key Saved",
-            description="Your Gemini key is stored securely and used only for your /site requests.",
-            color=COLOR_OK,
-        ))
-
-    @commands.hybrid_command(name="removekey", description="Remove your stored Gemini API key")
-    async def removekey_cmd(self, ctx: commands.Context) -> None:
-        if ctx.guild is not None:
-            await ctx.send("❌ Please use `/removekey` in a DM to Vyrion.", delete_after=10)
-            return
-        removed = await site_store.remove_user_gemini_key(ctx.author.id)
-        await ctx.send(embed=discord.Embed(
-            description="✅ Your Gemini API key was removed." if removed else "ℹ️ You didn't have a stored API key.",
-            color=COLOR_OK if removed else COLOR_INFO,
-        ))
-
     @commands.hybrid_command(name="myprojects", description="List your App Engineering projects with status and credits")
     async def myprojects_cmd(self, ctx: commands.Context) -> None:
         projects = await site_store.get_user_projects(ctx.author.id)
@@ -373,8 +327,6 @@ class SiteCog(commands.Cog, name="AppEngineering"):
                 color=COLOR_INFO,
             ))
             return
-        is_owner = await _is_bot_owner(self.bot, ctx.author.id)
-        _, remaining = await site_store.check_site_usage(ctx.author.id) if not is_owner else (True, "∞")
         lines = []
         for p in projects[-10:]:
             status_emoji = {
@@ -387,7 +339,7 @@ class SiteCog(commands.Cog, name="AppEngineering"):
             description="\n".join(lines),
             color=COLOR_INFO,
         )
-        embed.set_footer(text=f"{'∞' if is_owner else f'{remaining}/{SITE_FREE_MONTHLY_LIMIT}'} credits {'(owner — unlimited)' if is_owner else 'this month'}")
+        embed.set_footer(text="Vyrion App Engineering — Owner only")
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name="deleteproject", description="Delete one of your projects by ID")
@@ -402,30 +354,6 @@ class SiteCog(commands.Cog, name="AppEngineering"):
             return
         await site_store.delete_project(project_id)
         await ctx.send(embed=discord.Embed(description=f"🗑️ Project `{project_id}` deleted.", color=COLOR_OK))
-
-    @commands.hybrid_command(name="sitecredits", description="Check your remaining App Engineering credits")
-    async def sitecredits_cmd(self, ctx: commands.Context) -> None:
-        is_owner = await _is_bot_owner(self.bot, ctx.author.id)
-        if is_owner:
-            await ctx.send(embed=discord.Embed(
-                title="🆓 App Engineering Credits",
-                description="You are the bot owner — **unlimited** credits. Your sites never go offline.",
-                color=COLOR_OK,
-            ))
-            return
-        _, remaining = await site_store.check_site_usage(ctx.author.id)
-        has_key = await site_store.get_user_gemini_key(ctx.author.id) is not None
-        desc = f"**{remaining}/{SITE_FREE_MONTHLY_LIMIT}** credits remaining this month.\n"
-        if remaining == 0:
-            desc += "\n🚫 All your sites are **offline** until credits reset next month."
-        if has_key:
-            desc += "\n\n✅ You have a Gemini API key — unlimited generations (subject to Google's limits)."
-        await ctx.send(embed=discord.Embed(
-            title="🆓 App Engineering Credits",
-            description=desc,
-            color=COLOR_OK if remaining > 0 else COLOR_WARN,
-        ))
-
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(SiteCog(bot))
